@@ -71,6 +71,35 @@ Or call the tools directly:
 .venv/bin/python cli.py hint --refresh    # should I switch? (--apply to switch automatically)
 ```
 
+### Run automatically every market day (macOS)
+
+```bash
+./scripts/autostart.sh install      # Mon-Fri at 18:00 local time (START_TIME=17:30 to change)
+./scripts/autostart.sh status       # is it scheduled / running, last log lines
+./scripts/autostart.sh run-now      # start today's job immediately
+./scripts/autostart.sh uninstall
+```
+
+The job runs `monitor --session`, which:
+- reads Alpaca's exchange calendar, exits right away on US holidays, and
+  knows about early closes;
+- uses US Eastern time itself, so the US daylight-saving change needs no
+  edits;
+- stops 5 minutes after the close;
+- runs under `caffeinate`, so the Mac doesn't idle-sleep during the session.
+
+If the Mac is asleep at the start time, it runs as soon as the Mac wakes.
+Closing the lid on battery still puts the Mac to sleep. The log is in
+`data/monitor.log`.
+
+### Phone alerts (ntfy)
+
+1. Install the free **ntfy** app (iOS or Android).
+2. Subscribe to the topic named by `NTFY_TOPIC` in `.env`. Anyone who knows
+   the topic name can read your alerts, so keep it hard to guess.
+3. Choose which alerts reach your phone with `alerts.ntfy_kinds` in
+   `config.yaml`: BUY, SELL, WATCH, and INFO (stop moves, start and finish).
+
 Suggested routine: run `hint --refresh` before the open, start `monitor` at
 around 7:00 ET (premarket gappers), and keep the dashboard open for charts.
 Set `switch_hint.auto_switch: true` to let `monitor` pick the best recent

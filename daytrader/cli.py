@@ -129,7 +129,7 @@ def cmd_monitor(cfg, args):
             cfg = load_config()
     print(DISCLAIMER)
     try:
-        run_monitor(p, cfg, once=args.once)
+        run_monitor(p, cfg, once=args.once, session=args.session)
     except KeyboardInterrupt:
         print("\nMonitor stopped.")
 
@@ -158,6 +158,8 @@ def main():
     s.add_argument("--refresh", action="store_true", help="re-run the backtest first")
     s.add_argument("--apply", action="store_true", help="switch automatically if suggested")
     s = sub.add_parser("monitor"); s.add_argument("--strategy"); s.add_argument("--once", action="store_true")
+    s.add_argument("--session", action="store_true",
+                   help="for the daily job: skip holidays, stop 5 min after the close")
     sub.add_parser("auth")
     args = ap.parse_args()
     cfg = load_config()

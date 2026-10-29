@@ -79,6 +79,10 @@ alerts:
   poll_seconds: 60
   desktop_notifications: true # macOS notification centre
   sound: true
+  # Phone push via the free ntfy app: set NTFY_TOPIC in .env, then subscribe
+  # to that topic in the app. Which alert kinds to push:
+  ntfy_kinds: [BUY, SELL, WATCH, INFO]   # INFO = stop moves, start/finish
+  ntfy_server: https://ntfy.sh
 
 backtest:
   slippage_pct: 0.1          # per side, small caps have wide spreads

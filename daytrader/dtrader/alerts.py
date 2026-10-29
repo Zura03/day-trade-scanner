@@ -8,12 +8,15 @@ which feeds the strategy-switch hint. Nothing here places orders.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time as _time
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import pandas as pd
+
+import httpx
 
 from .config import DATA_DIR, load_config, load_state, save_state
 from .data.base import DataProvider, now_ny
@@ -24,6 +27,29 @@ from .strategies import Position, Strategy, get_strategy
 
 ALERTS = DATA_DIR / "alerts.jsonl"
 COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "WATCH": "\033[1;33m", "INFO": "\033[1;36m"}
+NTFY_STYLE = {  # priority, emoji tag
+    "BUY": ("high", "chart_with_upwards_trend"),
+    "SELL": ("high", "money_with_wings"),
+    "WATCH": ("default", "eyes"),
+    "INFO": ("low", "information_source"),
+}
+
+
+def push_ntfy(kind: str, title: str, body: str, cfg: dict) -> bool:
+    """Phone push via ntfy (https://ntfy.sh). The topic name is the only
+    secret, so it lives in .env as NTFY_TOPIC, not in config.yaml."""
+    a = cfg.get("alerts", {})
+    topic = os.environ.get("NTFY_TOPIC")
+    if not topic or kind not in a.get("ntfy_kinds", ["BUY", "SELL", "WATCH", "INFO"]):
+        return False
+    prio, tag = NTFY_STYLE.get(kind, ("default", "bell"))
+    try:
+        r = httpx.post(f"{a.get('ntfy_server', 'https://ntfy.sh').rstrip('/')}/{topic}",
+                       content=body.encode(), timeout=10,
+                       headers={"Title": f"{kind}: {title}".encode("utf-8"), "Priority": prio, "Tags": tag})
+        return r.status_code == 200
+    except httpx.HTTPError:
+        return False
 
 
 def notify(kind: str, title: str, body: str, cfg: dict) -> None:
@@ -44,6 +70,7 @@ def notify(kind: str, title: str, body: str, cfg: dict) -> None:
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         print("\a", end="", flush=True)
+    push_ntfy(kind, title, body, cfg)
 
 
 def load_alerts(limit: int = 300) -> pd.DataFrame:
@@ -153,17 +180,36 @@ def in_session(now: datetime) -> bool:
     return now.weekday() < 5 and time(4, 0) <= now.time() <= time(16, 5)
 
 
-def run_monitor(provider: DataProvider, cfg: dict, once: bool = False) -> None:
-    m = Monitor(provider, cfg)
+def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: bool = False) -> None:
+    """session=True (used by the daily background job): exit right away on
+    market holidays/weekends, and exit 5 minutes after today's close."""
     poll = int(cfg.get("alerts", {}).get("poll_seconds", 60))
-    notify("INFO", "Monitor started", f"strategy={m.strategy.title}, data={provider.name}, every {poll}s", cfg)
+    close_at = None
+    if session:
+        today = now_ny().date()
+        hours = provider.session_hours(today)
+        if hours is None:
+            print(f"[{now_ny():%Y-%m-%d %H:%M} ET] Market closed today - nothing to do.", flush=True)
+            return
+        close_at = hours[1] + timedelta(minutes=5)
+        if now_ny() >= close_at:  # e.g. Mac woke up after the US close
+            print(f"[{now_ny():%Y-%m-%d %H:%M} ET] Today's session is already over.", flush=True)
+            return
+    m = Monitor(provider, cfg)
+    notify("INFO", "Monitor started",
+           f"strategy={m.strategy.title}, data={provider.name}, every {poll}s"
+           + (f", until {close_at:%H:%M} ET" if close_at else ""), cfg)
     while True:
         now = now_ny()
+        if close_at and now >= close_at:
+            notify("INFO", "Monitor finished for today",
+                   f"{len(m.state['positions'])} tracked trade(s) still open", cfg)
+            return
         if once or in_session(now):
             try:
                 m.tick()
             except Exception as e:
-                print(f"tick error: {e}", file=sys.stderr)
+                print(f"tick error: {e}", file=sys.stderr, flush=True)
         if once:
             return
-        _time.sleep(poll if in_session(now) else 300)
+        _time.sleep(poll if in_session(now) else (60 if close_at else 300))
