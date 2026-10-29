@@ -72,8 +72,11 @@ switch_hint:
   # Suggest switching when the active strategy's expectancy (avg R per
   # trade) trails the best one by this much, or goes negative.
   margin_r: 0.15
-  # Run the backtest when `monitor` starts and switch automatically if suggested.
-  auto_switch: false
+  # When `monitor` starts (the daily job, before the open): re-run the backtest
+  # over lookback_days and push the result to your phone...
+  refresh_before_session: true
+  # ...and switch the active strategy automatically when the hint suggests it.
+  auto_switch: true
 
 # --- Alerts ------------------------------------------------------------
 alerts:

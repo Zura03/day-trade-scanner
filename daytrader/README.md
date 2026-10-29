@@ -177,10 +177,12 @@ internet):**
 3. Choose which alerts reach your phone with `alerts.ntfy_kinds` in
    `config.yaml`: BUY, SELL, WATCH, and INFO (stop moves, start and finish).
 
-Suggested routine: run `hint --refresh` before the open, start `monitor` at
-around 7:00 ET (premarket gappers), and keep the dashboard open for charts.
-Set `switch_hint.auto_switch: true` to let `monitor` pick the best recent
-strategy on start.
+Each daily job starts by re-running the backtest for its market and pushing
+a "Strategy check" with the top strategies. With `switch_hint.auto_switch:
+true`, the default, it also switches the active strategy when the hint
+suggests it, and pushes "Switched to ..." with the reason. This is skipped on
+holidays. If the check fails, the monitor keeps the current strategy and still
+starts.
 
 ## India: what's different
 
@@ -242,6 +244,17 @@ It looks at each strategy's expectancy (average R per trade) over the last
 from `monitor`, which count double. It suggests a switch when your strategy
 loses money or trails the best one by `margin_r`. If everything is negative,
 it suggests sitting out.
+
+The hint changes only when a new backtest runs (or a live trade closes). The
+daily jobs re-run it before each session; you can also refresh it with the
+dashboard's **Run backtest** button or `hint --refresh`. To keep the
+automatic refresh but switch by hand, set `auto_switch: false`. To turn the
+morning refresh off entirely, set `refresh_before_session: false`.
+
+Small samples can make auto-switching flip back and forth on noise. A
+strategy needs `min_trades` (5) trades in the window to be judged, and must
+beat the active one by `margin_r` (0.15R). Raise those for steadier
+switching, especially for India, where there are fewer gappers per day.
 
 ## Limits to know
 

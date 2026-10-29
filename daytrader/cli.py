@@ -124,17 +124,13 @@ def cmd_monitor(cfg, args):
         set_active_strategy(args.strategy, cfg["market"])
         cfg = load_config(cfg["market"])
     p = provider(cfg, args)
-    if cfg.get("switch_hint", {}).get("auto_switch"):
-        from dtrader.backtest import run_backtest
-        from dtrader.performance import strategy_hint
+    # Refresh the backtest + switch hint before the session (skipped on
+    # holidays, after the close and for --once).
+    if cfg.get("switch_hint", {}).get("refresh_before_session") and not args.once:
+        from dtrader.alerts import session_pending, strategy_check
 
-        t = run_backtest(p, cfg, all_strategies(cfg), days=cfg["switch_hint"].get("lookback_days", 10),
-                         log=lambda m: print(m, file=sys.stderr))
-        h = strategy_hint(t, cfg, names=list(REGISTRY))
-        print(h.message)
-        if h.switch and h.recommended:
-            set_active_strategy(h.recommended, cfg["market"])
-            cfg = load_config(cfg["market"])
+        if not args.session or session_pending(p, cfg):
+            cfg = strategy_check(p, cfg, log=lambda m: print(m, file=sys.stderr))
     print(DISCLAIMER)
     try:
         run_monitor(p, cfg, once=args.once, session=args.session)

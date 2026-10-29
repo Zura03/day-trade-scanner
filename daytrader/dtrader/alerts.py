@@ -18,7 +18,7 @@ import pandas as pd
 
 import httpx
 
-from .config import load_config, load_state, save_state
+from .config import load_config, load_state, save_state, set_active_strategy
 from .data.base import DataProvider
 from .indicators import add_indicators
 from .markets import US, Market, get_market
@@ -207,6 +207,46 @@ class Monitor:
             self.state["positions"] = still_open + positions[idx + 1:]
             self._save()
         self.state["positions"] = still_open
+
+
+def strategy_check(provider: DataProvider, cfg: dict, log=print) -> dict:
+    """Pre-session routine: re-run the backtest over the hint's lookback,
+    switch the active strategy if the hint says so (switch_hint.auto_switch),
+    and push the result. Never blocks the monitor: on failure it reports and
+    keeps the current strategy. Returns the (possibly updated) config."""
+    from .backtest import run_backtest
+    from .performance import strategy_hint
+    from .strategies import REGISTRY, all_strategies
+
+    m: Market = cfg.get("market", US)
+    sh = cfg.get("switch_hint", {})
+    try:
+        t = run_backtest(provider, cfg, all_strategies(cfg), days=int(sh.get("lookback_days", 10)), log=log)
+        h = strategy_hint(t, cfg, names=list(REGISTRY))
+    except Exception as e:
+        notify("INFO", "Strategy check failed", f"Keeping {cfg['active_strategy']}: {str(e)[:150]}", cfg)
+        return cfg
+    tbl = h.table.dropna(subset=["expectancy_R"])
+    tbl = tbl[tbl["trades"] >= int(sh.get("min_trades", 5))].sort_values("expectancy_R", ascending=False)
+    top = ", ".join(f"{REGISTRY[n].title} {r['expectancy_R']:+.2f}R ({int(r['trades'])})"
+                    for n, r in tbl.head(3).iterrows())
+    if h.switch and h.recommended and sh.get("auto_switch"):
+        old = cfg["active_strategy"]
+        set_active_strategy(h.recommended, m)
+        cfg = load_config(m)
+        notify("INFO", f"Switched to {REGISTRY[h.recommended].title}",
+               f"was {REGISTRY[old].title}. {h.message} Top: {top}", cfg)
+    else:
+        notify("INFO", f"Strategy check: {REGISTRY[cfg['active_strategy']].title}",
+               f"{h.message} Top: {top}", cfg)
+    return cfg
+
+
+def session_pending(provider: DataProvider, cfg: dict) -> bool:
+    """True if today is a trading day for this market and it hasn't closed yet."""
+    m: Market = cfg.get("market", US)
+    hours = provider.session_hours(m.now().date())
+    return hours is not None and m.now() < hours[1]
 
 
 def in_session(now: datetime, market: Market = US) -> bool:
