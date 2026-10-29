@@ -182,21 +182,23 @@ def picks():
     money = st.column_config.NumberColumn(format="%.2f")
     pct = st.column_config.NumberColumn(format="%.1f")
     st.dataframe(view[cols].style.map(style_status, subset=["status"]),
-                 use_container_width=True, hide_index=True, height=min(600, 40 + 35 * len(view)),
+                 width="stretch", hide_index=True, height=min(600, 40 + 35 * len(view)),
                  column_config={"score": pct, "last": money, "gap_%": pct, "day_%": pct, "rel_vol": pct,
                                 "float_M": pct, "entry": money, "stop": money, "target": money,
                                 "shares": st.column_config.NumberColumn(format="%d")})
 
     st.subheader("Chart")
     syms = list(dict.fromkeys(view["symbol"]))
-    pick = st.selectbox("Symbol", syms, key="chart_sym")
-    cand = next(c for c in cands if c.symbol == pick)
-    sname = st.selectbox("Overlay strategy", [s.name for s in strats], key="chart_strat",
+    pick = st.selectbox("Symbol", syms, key=f"chart_sym_{mk.key}")
+    cand = next((c for c in cands if c.symbol == pick), None)
+    if cand is None:  # stale pick from an earlier scan
+        return
+    sname = st.selectbox("Overlay strategy", [s.name for s in strats], key=f"chart_strat_{mk.key}",
                          format_func=lambda n: REGISTRY[n].title) if compare else strategy.name
     a = cand.results.get(sname, {})
     st.plotly_chart(candle_chart(cand, a.get("signal"), a.get("watch"),
                                  f"{pick} - {REGISTRY[sname].title}: {a.get('status', '')}"),
-                    use_container_width=True)
+                    width="stretch")
 
 
 with tab_picks:
@@ -220,7 +222,7 @@ with tab_bt:
         st.rerun()
     trades = st.session_state.get(f"bt_{mk.key}", load_last_trades(mk))
     if len(trades):
-        st.dataframe(summarize(trades, names), use_container_width=True)
+        st.dataframe(summarize(trades, names), width="stretch")
         fig = go.Figure()
         for n in names:
             t = trades[trades["strategy"] == n].sort_values("entry_time")
@@ -229,10 +231,10 @@ with tab_bt:
                                          mode="lines+markers"))
         fig.update_layout(title="Cumulative R by trade", xaxis_title="trade #", yaxis_title="R",
                           height=380, margin=dict(l=10, r=10, t=40, b=10))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         f = st.multiselect("Filter strategy", names, default=[])
         show = trades[trades["strategy"].isin(f)] if f else trades
-        st.dataframe(show.sort_values("entry_time", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(show.sort_values("entry_time", ascending=False), width="stretch", hide_index=True)
         st.caption("Backtests use symbols that gapped at the open (or ran 20%+ the day before) from your "
                    "scan history, watchlist and current movers. Small sample + survivorship bias: use it to "
                    "compare strategies, not to forecast returns.")
@@ -244,7 +246,7 @@ with tab_hint:
     t = st.session_state.get(f"bt_{mk.key}", load_last_trades(mk))
     h = strategy_hint(t, cfg, names=names)
     (st.warning if h.switch else st.success)(h.message)
-    st.dataframe(h.table, use_container_width=True)
+    st.dataframe(h.table, width="stretch")
     if h.switch and h.recommended:
         if st.button(f"Apply: switch to {REGISTRY[h.recommended].title}", key="apply_hint"):
             set_active_strategy(h.recommended, mk)
@@ -263,18 +265,18 @@ with tab_alerts:
     st.subheader(f"Open tracked trades ({len(pos)})")
     if pos:
         st.dataframe(pd.DataFrame(pos)[["symbol", "strategy", "entry_time", "entry", "stop", "target", "shares"]],
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
     al = load_alerts(market=mk)
     st.subheader("Alert log")
     if len(al):
-        st.dataframe(al.iloc[::-1], use_container_width=True, hide_index=True)
+        st.dataframe(al.iloc[::-1], width="stretch", hide_index=True)
     else:
         st.caption("No alerts yet.")
     j = load_journal(mk)
     st.subheader("Closed trades (journal)")
     if len(j):
         st.dataframe(j[["day", "symbol", "strategy", "entry", "exit_price", "exit_reason", "r", "shares"]].iloc[::-1],
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
         st.metric("Live total R", f"{j['r'].sum():+.2f}")
     else:
         st.caption("No closed trades yet.")
