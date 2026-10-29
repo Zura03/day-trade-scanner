@@ -108,6 +108,7 @@ class AlpacaProvider(DataProvider):
         try:
             j = self._get("/v1beta1/screener/stocks/movers", {"top": 50})
             syms += [m["symbol"] for m in j.get("gainers", [])]
+            syms += [m["symbol"] for m in j.get("losers", [])[:20]]  # gap-downs (bagholder bounce)
             j = self._get("/v1beta1/screener/stocks/most-actives", {"by": "volume", "top": 100})
             syms += [m["symbol"] for m in j.get("most_actives", [])]
         except Exception:

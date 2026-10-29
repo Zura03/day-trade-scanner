@@ -155,10 +155,11 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
         # Before the open the day's volume is ~0, so relative volume can't filter yet.
         premarket = m.now().time() < m.open
         weak_vol = rv < u.get("min_rel_volume", 2) and not premarket
-        if sources[sym] == "movers" and is_today and (chg < u.get("min_gap_pct", 5) or weak_vol):
+        # movers in either direction (gap-downs feed the bagholder bounce)
+        if sources[sym] == "movers" and is_today and (abs(chg) < u.get("min_gap_pct", 5) or weak_vol):
             continue
         rows.append((sym, chg, rv, r["last"]))
-    rows.sort(key=lambda x: x[1] * math.log2(x[2] + 2), reverse=True)
+    rows.sort(key=lambda x: abs(x[1]) * math.log2(x[2] + 2), reverse=True)
     rows = rows[: int(u.get("max_candidates", 25))]
 
     floats = provider.float_shares([r[0] for r in rows])
@@ -169,7 +170,9 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
         if max_f and fl and fl / 1e6 > max_f:
             continue
         try:
-            prev_close, avg_vol, _ = prior_stats(provider, sym, day)
+            prev_close, avg_vol, daily = prior_stats(provider, sym, day)
+            prior = daily[daily.index.date < day]
+            ph, pl = (float(prior["high"].iloc[-1]), float(prior["low"].iloc[-1])) if len(prior) else (np.nan, np.nan)
             bars = provider.intraday(sym, day)
         except Exception as e:  # one bad symbol shouldn't kill the scan
             log(f"  skip {sym}: {e}")
@@ -177,7 +180,8 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
         if not len(bars) or np.isnan(prev_close):
             continue
         ctx = build_context(sym, day, bars, prev_close, avg_vol, fl, market=m,
-                            premarket_volume_known=provider.premarket_volume_known)
+                            premarket_volume_known=provider.premarket_volume_known,
+                            prev_high=ph, prev_low=pl)
         last = float(bars["close"].iloc[-1])
         rel = float(bars["volume"].sum() / avg_vol) if avg_vol else rv
         out.append(Candidate(sym, ctx, add_indicators(bars, m), last, rel, sources[sym]))

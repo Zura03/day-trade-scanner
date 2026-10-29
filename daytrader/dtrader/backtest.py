@@ -151,7 +151,8 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
                 continue
             ctx = build_context(sym, dd, bars, float(prior["close"].iloc[-1]),
                                 float(prior["volume"].tail(10).mean()), market=provider.market,
-                                premarket_volume_known=provider.premarket_volume_known)
+                                premarket_volume_known=provider.premarket_volume_known,
+                                prev_high=float(prior["high"].iloc[-1]), prev_low=float(prior["low"].iloc[-1]))
             df = add_indicators(bars, provider.market)
             if not df["regular"].any():
                 continue

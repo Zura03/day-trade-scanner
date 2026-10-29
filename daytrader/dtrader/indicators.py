@@ -52,6 +52,8 @@ class DayContext:
     premarket_volume: float | None = 0.0   # None = source can't report it
     premarket_last: float = np.nan
     open_price: float = np.nan
+    prev_high: float = np.nan     # previous session's high / low (stop-hunt levels)
+    prev_low: float = np.nan
     extra: dict = field(default_factory=dict)
 
     @property
@@ -68,11 +70,12 @@ class DayContext:
 
 def build_context(symbol: str, day: date, bars: pd.DataFrame, prev_close: float,
                   avg_volume: float = 0.0, float_shares: float | None = None,
-                  market: Market = US, premarket_volume_known: bool = True) -> DayContext:
+                  market: Market = US, premarket_volume_known: bool = True,
+                  prev_high: float = np.nan, prev_low: float = np.nan) -> DayContext:
     pre = bars[bars.index.time < market.open]
     reg = bars[(bars.index.time >= market.open) & (bars.index.time < market.close)]
     ctx = DayContext(symbol=symbol, day=day, prev_close=prev_close, avg_volume=avg_volume,
-                     float_shares=float_shares)
+                     float_shares=float_shares, prev_high=prev_high, prev_low=prev_low)
     if len(pre):
         ctx.premarket_high = float(pre["high"].max())
         ctx.premarket_low = float(pre["low"].min())

@@ -51,15 +51,17 @@ def finished_bars(df: pd.DataFrame, market: Market) -> pd.DataFrame:
 
 
 def rank_movers(q: pd.DataFrame, limit: int) -> list[str]:
-    """Top gainers by % change, then the most unusual volume (quotes frame)."""
+    """Top gainers by % change, the biggest losers (gap-down setups), then the
+    most unusual volume (quotes frame)."""
     if q.empty:
         return []
     q = q[(q["prev_close"] > 0) & (q["last"] > 0)].copy()
     q["chg"] = q["last"] / q["prev_close"] - 1
     q["rv"] = q["volume"] / q["avg_volume"].where(q["avg_volume"] > 0)
     top = list(q.sort_values("chg", ascending=False).index[:limit])
-    active = [s for s in q.sort_values("rv", ascending=False).index[:limit // 2] if s not in top]
-    return (top + active)[:limit]
+    down = [s for s in q[q["chg"] < 0].sort_values("chg").index[:limit // 4] if s not in top]
+    active = [s for s in q.sort_values("rv", ascending=False).index[:limit // 2] if s not in top + down]
+    return (top[: limit - len(down[:limit // 4])] + down + active)[:limit]
 
 
 class DataProvider(ABC):

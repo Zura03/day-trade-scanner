@@ -34,7 +34,7 @@ class YFinanceProvider(DataProvider):
 
     def movers(self, limit: int = 50) -> list[str]:
         syms: list[str] = []
-        for q in ("small_cap_gainers", "day_gainers", "most_actives"):
+        for q in ("small_cap_gainers", "day_gainers", "most_actives", "day_losers"):
             try:
                 res = yf.screen(q, count=100)
             except Exception:
