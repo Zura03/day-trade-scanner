@@ -23,8 +23,8 @@ sessions and tells you when to switch.
   suggests when to switch or sit out.
 - **Two markets:** US (premarket gappers) and India (NSE F&O, IST hours).
   Switch in the dashboard or with `--market india`.
-- **Data sources:** Alpaca (free plan), Schwab, or Yahoo for the US; Zerodha
-  Kite or free Yahoo NSE data for India.
+- **Data sources:** Alpaca (free plan), Schwab, or Yahoo for the US; Groww,
+  Zerodha Kite, or free Yahoo NSE data for India.
 
 ## Quick start
 
@@ -47,7 +47,7 @@ the setup steps below.
 
 ## Documentation
 
-Full setup (Alpaca, Schwab and Zerodha keys), strategy rules, exits, configuration
+Full setup (Alpaca, Schwab, Groww and Zerodha keys), strategy rules, exits, configuration
 and known limits are in [daytrader/README.md](daytrader/README.md).
 
 ## Layout
@@ -60,7 +60,7 @@ daytrader/
   config.yaml       filters, risk, exits, strategy parameters
   dtrader/
     markets/        US / India session hours, calendars, F&O list
-    data/           Alpaca, Schwab, Zerodha Kite and Yahoo providers
+    data/           Alpaca, Schwab, Groww, Zerodha Kite and Yahoo providers
     strategies/     one file per strategy + registry
     scanner.py      finds and ranks today's movers
     backtest.py     market-wide replay of recent sessions

@@ -50,10 +50,30 @@ real-time data.
 With `data_source: auto` in `config.yaml`, the tool uses Alpaca if its keys
 are set, then Schwab, then Yahoo.
 
-### India: Zerodha Kite (optional, ₹500/month)
+### India: Groww (optional, about ₹499/month)
 
 India works right away on free Yahoo NSE data, which was near real-time in
-testing but is unofficial. For Zerodha's official feed:
+testing but is unofficial. If you trade with Groww, its Trade API gives
+official live quotes and 1-minute history back to 2020:
+
+1. Subscribe to Groww's **Trading API**, then open **Groww Cloud → API Keys**.
+2. Create an **API key + secret** and put them in `.env` as `GROWW_API_KEY` and
+   `GROWW_API_SECRET`.
+3. **Each trading morning**, approve the key on that API Keys page. The
+   monitor picks up the approval within 2 to 5 minutes and switches from Yahoo
+   to Groww. To check right away, run `./run.sh --market india auth`.
+
+Groww's other option, TOTP (`GROWW_TOTP_TOKEN` / `GROWW_TOTP_SECRET`), skips
+the daily approval. But anyone with your `.env` could then trade on your
+account, so only use it if the Mac is secure.
+
+The day's token is cached in `data/india/groww_token.json`. Groww allows only
+150 token requests a day, so while approval is pending the tool retries at
+most every 5 minutes.
+
+### India: Zerodha Kite (alternative, ₹500/month)
+
+If you use Zerodha instead (Groww is preferred when both are set):
 
 1. Subscribe to the **Kite Connect** plan at <https://developers.kite.trade>.
    Market data and historical candles need the paid Connect plan; the free
@@ -66,9 +86,9 @@ testing but is unofficial. For Zerodha's official feed:
    and it saves the day's token to `data/india/kite_token.json`. Kite tokens
    expire around 6:00 IST every day.
 
-If you haven't logged in yet when the India monitor starts, it pushes a
-reminder and uses Yahoo data. It switches to Kite within 2 minutes of your
-login.
+If you haven't logged in or approved yet when the India monitor starts, it
+pushes a reminder and uses Yahoo data. It switches to your broker shortly
+after you do.
 
 ## Daily use
 

@@ -6,7 +6,8 @@ from .base import DataProvider
 
 def get_provider(cfg: dict | None = None, source: str | None = None) -> DataProvider:
     """US:    auto = Alpaca if its keys are in .env, else Schwab, else free Yahoo.
-    India: auto = Zerodha Kite if keys are set and you logged in today, else free Yahoo (NSE)."""
+    India: auto = your broker (Groww, else Zerodha Kite) once today's login is
+           done, else free Yahoo (NSE)."""
     cfg = cfg or load_config()
     market = cfg["market"]
     source = source or cfg.get("data_source", "auto")
@@ -34,18 +35,43 @@ def get_provider(cfg: dict | None = None, source: str | None = None) -> DataProv
     return YFinanceProvider()
 
 
+# ---- India brokers ----------------------------------------------------------
+def india_broker() -> str | None:
+    """Which broker API is configured in .env (Groww preferred)."""
+    from .groww_provider import groww_credentials
+
+    if groww_credentials():
+        return "groww"
+    if kite_keys():
+        return "kite"
+    return None
+
+
+def _broker_provider(broker: str, fetch_token: bool = True) -> DataProvider | None:
+    if broker == "groww":
+        from .groww_provider import GrowwProvider, cached_token, groww_token
+
+        tok = groww_token() if fetch_token else cached_token()
+        return GrowwProvider(tok) if tok else None
+    if broker == "kite":
+        from .kite_provider import KiteProvider, token_valid_today
+
+        tok, keys = token_valid_today(), kite_keys()
+        return KiteProvider(keys[0], tok) if tok and keys else None
+    return None
+
+
 def _india_provider(source: str) -> DataProvider:
-    if source in ("kite", "auto"):
-        from .kite_provider import token_valid_today
-
-        keys, token = kite_keys(), token_valid_today()
-        if keys and token:
-            from .kite_provider import KiteProvider
-
-            return KiteProvider(keys[0], token)
-        if source == "kite":
-            raise RuntimeError("Zerodha: " + ("set KITE_API_KEY / KITE_API_SECRET in .env" if not keys
-                                              else "log in for today with  ./run.sh --market india auth"))
+    if source in ("groww", "kite"):
+        p = _broker_provider(source)
+        if p is None:
+            raise RuntimeError(india_login_hint(source) or f"{source} is not configured in .env")
+        return p
+    if source == "auto":
+        broker = india_broker()
+        p = _broker_provider(broker) if broker else None
+        if p is not None:
+            return p
     elif source != "yfinance":
         raise RuntimeError(f"Data source '{source}' is not available for the India market")
     from .yf_provider import YFinanceIndiaProvider
@@ -53,8 +79,47 @@ def _india_provider(source: str) -> DataProvider:
     return YFinanceIndiaProvider()
 
 
-def kite_login_needed() -> bool:
-    """Kite keys are configured but today's login hasn't happened yet."""
-    from .kite_provider import token_valid_today
+def india_login_needed() -> bool:
+    """A broker is configured but there's no token for today yet (no network call)."""
+    broker = india_broker()
+    if broker == "groww":
+        from .groww_provider import cached_token
 
-    return bool(kite_keys()) and not token_valid_today()
+        return not cached_token()
+    if broker == "kite":
+        from .kite_provider import token_valid_today
+
+        return not token_valid_today()
+    return False
+
+
+def india_login_hint(broker: str | None = None) -> str | None:
+    broker = broker or india_broker()
+    if broker == "groww":
+        from .groww_provider import groww_credentials
+
+        c = groww_credentials()
+        if not c:
+            return "Groww: set GROWW_API_KEY / GROWW_API_SECRET in .env"
+        if c["mode"] == "approval":
+            return "Groww: approve today's API key on Groww Cloud (API Keys page)"
+        return "Groww: TOTP login failed - check GROWW_TOTP_TOKEN / GROWW_TOTP_SECRET"
+    if broker == "kite":
+        if not kite_keys():
+            return "Zerodha: set KITE_API_KEY / KITE_API_SECRET in .env"
+        return "Zerodha: log in for today with  ./run.sh --market india auth"
+    return None
+
+
+def india_token_state() -> str:
+    """Changes when a new broker token appears (dashboard cache key)."""
+    broker = india_broker()
+    if broker == "groww":
+        from .groww_provider import cached_token
+
+        return f"groww:{cached_token() or ''}"
+    if broker == "kite":
+        from .kite_provider import token_valid_today
+
+        return f"kite:{token_valid_today() or ''}"
+    return "none"

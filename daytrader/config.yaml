@@ -97,8 +97,9 @@ backtest:
 # for `--market india`. Prices and risk are in rupees.
 # ======================================================================
 india:
-  # auto: Zerodha Kite if KITE_API_KEY/SECRET are in .env and you logged in
-  # today (./run.sh --market india auth), else free Yahoo NSE data.
+  # auto: your broker once today's login is done - Groww (GROWW_API_KEY/SECRET,
+  # approve the key daily on Groww Cloud) or Zerodha Kite (KITE_API_KEY/SECRET,
+  # ./run.sh --market india auth) - else free Yahoo NSE data.
   data_source: auto
   kite:
     redirect_url: http://127.0.0.1:5010/kite   # set the same URL in your Kite app

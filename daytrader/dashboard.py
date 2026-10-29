@@ -51,12 +51,12 @@ require_password()
 
 
 @st.cache_resource(show_spinner="Connecting to data source...", ttl=600)
-def provider_for(market_key: str, source: str, kite_token: str | None):
-    # kite_token is part of the cache key so a fresh Zerodha login is picked up
+def provider_for(market_key: str, source: str, broker_token: str | None):
+    # broker_token is part of the cache key so a fresh Groww/Zerodha login is picked up
     return get_provider(load_config(market_key), source)
 
 
-SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "kite", "yfinance"]}
+SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "groww", "kite", "yfinance"]}
 
 # ---------------- sidebar ------------------------------------------------
 with st.sidebar:
@@ -68,21 +68,19 @@ with st.sidebar:
     opts = SOURCES[mkey]
     source = st.selectbox("Data source", opts, key=f"source_{mkey}",
                           index=opts.index(cfg.get("data_source", "auto")) if cfg.get("data_source", "auto") in opts else 0)
-    kite_tok = None
+    broker_tok = None
     if mkey == "india":
-        from dtrader.data import kite_login_needed
-        from dtrader.data.kite_provider import token_valid_today
+        from dtrader.data import india_login_hint, india_login_needed, india_token_state
 
-        kite_tok = token_valid_today()
+        broker_tok = india_token_state()
     try:
-        prov = provider_for(mkey, source, kite_tok)
+        prov = provider_for(mkey, source, broker_tok)
         st.caption(f"Using **{prov.name}** data")
     except Exception as e:
         st.error(f"Data source error: {e}")
         st.stop()
-    if mkey == "india" and kite_login_needed():
-        st.warning("Zerodha not logged in today - using free Yahoo data. "
-                   "Log in on the Mac with `./run.sh --market india auth`.")
+    if mkey == "india" and india_login_needed() and prov.name == "yfinance_in":
+        st.warning(f"Not logged in to your broker today - using free Yahoo data. {india_login_hint()}")
 
     names = list(REGISTRY)
     active = st.selectbox("Active strategy", names, index=names.index(cfg["active_strategy"]),

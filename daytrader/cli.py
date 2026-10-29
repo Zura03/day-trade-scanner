@@ -9,7 +9,7 @@ Add --market india before the command for the Indian market (default: us).
   python cli.py backtest --days 10      replay recent sessions for every strategy
   python cli.py hint                    should I switch strategies?
   python cli.py monitor                 live BUY / SELL alerts (runs until Ctrl-C)
-  python cli.py auth                    log in to Schwab (US) / Zerodha (India, daily)
+  python cli.py auth                    log in to Schwab (US) / Groww or Zerodha (India, daily)
 
   python cli.py --market india scan     same commands for NSE
 """
@@ -146,16 +146,32 @@ def cmd_auth(cfg, args):
     from dtrader.data import get_provider
 
     if cfg["market"].key == "india":
-        from dtrader.config import kite_keys
-        from dtrader.data.kite_provider import kite_login
+        from dtrader.data import india_broker
 
-        keys = kite_keys()
-        if not keys:
-            sys.exit("Add KITE_API_KEY and KITE_API_SECRET to .env first (from developers.kite.trade).")
-        kite_login(keys[0], keys[1], (cfg.get("kite") or {}).get("redirect_url", "http://127.0.0.1:5010/kite"))
-        p = get_provider(cfg, "kite")
-        print(f"Zerodha login OK for today ({len(p.all_symbols())} F&O stocks available).")
-        return
+        broker = india_broker()
+        if broker == "groww":
+            from dtrader.data.groww_provider import groww_token, last_token_error
+
+            if not groww_token(force=True):
+                sys.exit(f"Groww refused the login: {last_token_error()}\n"
+                         "If you use API key + secret, approve today's key on Groww Cloud's "
+                         "API Keys page, then run this again.")
+            p = get_provider(cfg, "groww")
+            q = p.quotes(["RELIANCE"])
+            px = f", RELIANCE {q['last'].iloc[0]:.2f}" if len(q) else ""
+            print(f"Groww login OK for today{px}.")
+            return
+        if broker == "kite":
+            from dtrader.config import kite_keys
+            from dtrader.data.kite_provider import kite_login
+
+            keys = kite_keys()
+            kite_login(keys[0], keys[1], (cfg.get("kite") or {}).get("redirect_url", "http://127.0.0.1:5010/kite"))
+            p = get_provider(cfg, "kite")
+            print(f"Zerodha login OK for today ({len(p.all_symbols())} F&O stocks available).")
+            return
+        sys.exit("No India broker in .env: add GROWW_API_KEY / GROWW_API_SECRET "
+                 "(or KITE_API_KEY / KITE_API_SECRET).")
     p = get_provider(cfg, "schwab")
     r = p.client.get_quotes(["AAPL"])
     print("Schwab login OK" if r.status_code == 200 else f"Schwab returned {r.status_code}: {r.text[:200]}")
@@ -164,7 +180,7 @@ def cmd_auth(cfg, args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--market", default="us", choices=["us", "india"], help="market to work on (default us)")
-    ap.add_argument("--source", choices=["auto", "alpaca", "schwab", "yfinance", "kite"], help="override data_source")
+    ap.add_argument("--source", choices=["auto", "alpaca", "schwab", "yfinance", "groww", "kite"], help="override data_source")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("strategies")
     s = sub.add_parser("switch"); s.add_argument("name")

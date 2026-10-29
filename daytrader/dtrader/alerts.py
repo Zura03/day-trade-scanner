@@ -193,17 +193,14 @@ def in_session(now: datetime, market: Market = US) -> bool:
     return now.weekday() < 5 and market.day_start <= now.time() <= end
 
 
-def _kite_if_ready(cfg: dict) -> DataProvider | None:
-    """India: switch from Yahoo to Kite as soon as today's Zerodha login exists."""
-    from .data import get_provider, kite_login_needed
+def _broker_if_ready(broker: str) -> DataProvider | None:
+    """India: the broker's provider once today's login/approval exists."""
+    from .data import _broker_provider
 
-    if kite_login_needed():
-        return None
     try:
-        p = get_provider(cfg, "kite")
+        return _broker_provider(broker)  # Groww retries its token at most every 5 min
     except Exception:
         return None
-    return p
 
 
 def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: bool = False) -> None:
@@ -225,26 +222,30 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
     notify("INFO", "Monitor started",
            f"strategy={mon.strategy.title}, data={provider.name}, every {poll}s"
            + (f", until {close_at:%H:%M} {m.tz_label}" if close_at else ""), cfg)
-    kite_wanted = m.key == "india" and provider.name != "kite" and cfg.get("data_source", "auto") in ("auto", "kite")
-    if kite_wanted:
-        from .data import kite_login_needed
+    broker = None
+    if m.key == "india" and cfg.get("data_source", "auto") == "auto":
+        from .data import india_broker, india_login_hint
 
-        if kite_login_needed():
-            notify("INFO", "Zerodha login needed",
-                   "Using free Yahoo data until you log in: ./run.sh --market india auth", cfg)
-    last_kite_check = _time.time()
+        broker = india_broker()
+        if broker and provider.name == broker:
+            broker = None  # already on the broker feed
+        elif broker:
+            notify("INFO", f"{broker.title()} login needed",
+                   f"Using free Yahoo data until then. {india_login_hint(broker)}", cfg)
+    last_broker_check = _time.time()
     while True:
         now = m.now()
         if close_at and now >= close_at:
             notify("INFO", "Monitor finished for today",
                    f"{len(mon.state['positions'])} tracked trade(s) still open", cfg)
             return
-        if kite_wanted and _time.time() - last_kite_check > 120:
-            last_kite_check = _time.time()
-            kp = _kite_if_ready(cfg)
-            if kp is not None:
-                mon.p, mon.cands, kite_wanted = kp, [], False
-                notify("INFO", "Switched to Zerodha data", "Logged in for today - now using Kite", cfg)
+        if broker and _time.time() - last_broker_check > 120:
+            last_broker_check = _time.time()
+            bp = _broker_if_ready(broker)
+            if bp is not None:
+                mon.p, mon.cands = bp, []
+                notify("INFO", f"Switched to {broker.title()} data", "Logged in for today", cfg)
+                broker = None
         if once or in_session(now, m):
             try:
                 mon.tick()
