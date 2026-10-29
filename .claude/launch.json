@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "./daytrader/run.sh",
+      "runtimeArgs": ["dashboard"],
+      "port": 8501
+    }
+  ]
+}

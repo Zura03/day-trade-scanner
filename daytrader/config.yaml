@@ -1,0 +1,89 @@
+# ------------------------------------------------------------------
+# Day-trade scanner configuration
+# ------------------------------------------------------------------
+
+# Data source: "alpaca", "schwab", "yfinance" (free, no key) or "auto"
+# (Alpaca if its keys are in .env, else Schwab, else Yahoo).
+data_source: auto
+
+alpaca:
+  # sip_delayed: free plan - full-market bars up to 16 min ago + live IEX bars after
+  # sip:         paid Algo Trader Plus - real-time full-market data
+  # iex:         IEX exchange only (real-time, thin volume on small caps)
+  feed: sip_delayed
+
+schwab:
+  token_path: data/schwab_token.json
+  callback_url: https://127.0.0.1:8182
+
+# Strategy used by `scan`, `monitor` and the dashboard unless overridden.
+# Change it with:  python cli.py switch <name>   (or the dashboard dropdown)
+active_strategy: gap_and_go
+
+# --- Universe: which stocks are even considered ----------------------
+universe:
+  min_price: 1.0
+  max_price: 20.0
+  min_gap_pct: 5.0            # % change vs previous close to be a "mover"
+  min_rel_volume: 2.0         # today's volume vs 10-day avg at same pace
+  max_float_millions: 50      # skip filter when float is unknown
+  max_candidates: 25          # how many movers to analyse each scan
+  # Always included in addition to the live movers list:
+  watchlist: []
+
+# --- Risk / sizing (used to show share size on alerts) ----------------
+risk:
+  account_size: 25000
+  risk_per_trade: 100         # $ you're willing to lose if stop is hit
+  max_position_pct: 25        # never size above this % of account
+  reward_risk: 2.0            # default profit target = entry + R * risk
+
+# --- Exits shared by all strategies -----------------------------------
+exits:
+  trail_after_r: 1.0          # once +1R, trail stop under 9 EMA (1-min)
+  breakeven_after_r: 1.0      # move stop to entry once +1R
+  time_exit: "15:50"          # flatten anything still open
+  no_new_entries_after: "11:30"   # small-cap momentum fades after morning
+
+# --- Per-strategy parameters (override defaults in code) --------------
+strategies:
+  gap_and_go:
+    min_gap_pct: 10
+    min_premarket_volume: 100000
+  bull_flag:
+    min_day_gain_pct: 10
+    max_pullback_bars: 5
+    max_retrace_pct: 50
+  orb:
+    range_minutes: 5
+  vwap_reclaim:
+    min_gap_pct: 8
+  red_to_green:
+    min_dip_pct: 2
+  oversold_bounce:
+    min_flush_pct: 8
+    rsi_max: 25
+
+# --- Strategy-switch hint ---------------------------------------------
+switch_hint:
+  lookback_days: 10           # rolling window used to judge strategies
+  min_trades: 5               # need at least this many trades to judge
+  # Suggest switching when the active strategy's expectancy (avg R per
+  # trade) trails the best one by this much, or goes negative.
+  margin_r: 0.15
+  # Run the backtest when `monitor` starts and switch automatically if suggested.
+  auto_switch: false
+
+# --- Alerts ------------------------------------------------------------
+alerts:
+  poll_seconds: 60
+  desktop_notifications: true # macOS notification centre
+  sound: true
+
+backtest:
+  slippage_pct: 0.1          # per side, small caps have wide spreads
+  # market: every listed stock that gapped each day (Alpaca). seen: only
+  # symbols from scan history / watchlist / today's movers.
+  universe: market
+  min_avg_volume: 100000     # skip illiquid names (10-day avg daily volume)
+  max_symbols_per_day: 60    # strongest gappers per day to replay
