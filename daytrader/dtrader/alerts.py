@@ -24,7 +24,7 @@ from .indicators import add_indicators
 from .markets import US, Market, get_market
 from .performance import journal_path
 from .scanner import analyse, gather_candidates, session_day
-from .strategies import Position, Strategy, get_strategy
+from .strategies import MAX_CHASE_R, Position, Strategy, get_strategy
 COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "WATCH": "\033[1;33m", "INFO": "\033[1;36m"}
 NTFY_STYLE = {  # priority, emoji tag
     "BUY": ("high", "chart_with_upwards_trend"),
@@ -150,7 +150,7 @@ class Monitor:
     def _open(self, s, last: float, day) -> None:
         """BUY alert + tracked position, with the backtest's rules: one open
         position per symbol, max trades per symbol per day, and a fill at the
-        current price (skip if it has already run more than 0.5R past the trigger)."""
+        current price (skip if it has already run more than MAX_CHASE_R past the trigger)."""
         open_syms = {d["symbol"] for d in self.state["positions"]}
         taken = self.state.setdefault("trades_today", {})
         taken = {k: v for k, v in taken.items() if k.startswith(f"{day}|")}
@@ -159,9 +159,7 @@ class Monitor:
         if s.symbol in open_syms or taken.get(tkey, 0) >= self.strategy.max_trades_per_day:
             return
         fill = max(s.entry, last)
-        if fill - s.entry > 0.5 * s.risk:
-            notify("INFO", f"{s.symbol}: missed entry",
-                   f"triggered {s.entry:.2f} but already {last:.2f} (>0.5R past) - not chasing", self.cfg)
+        if fill - s.entry > MAX_CHASE_R * s.risk:  # analyse() normally filters this already
             return
         s.entry = round(fill, 4)
         sh = self.strategy.position_size(s)
@@ -190,12 +188,7 @@ class Monitor:
                 continue
             # replay from a fresh copy of the original trade each time
             replay = Position(p.symbol, p.strategy, p.entry_time, p.entry, p.initial_stop,
-                              p.target, p.initial_stop, p.shares)
-            if p.entry_time in bars.index:
-                replay.check_entry_bar(bars.loc[p.entry_time])
-            for ts, bar in bars[bars.index > p.entry_time].iterrows():
-                if not replay.is_open or replay.step(ts, bar, strat.exits):
-                    break
+                              p.target, p.initial_stop, p.shares).replay(bars, strat.exits)
             for note in replay.notes[len(p.notes):]:
                 if not self._seen(f"note|{p.symbol}|{p.entry_time}|{note}"):
                     notify("INFO", f"{p.symbol}: {note.split(' ', 1)[1]}",

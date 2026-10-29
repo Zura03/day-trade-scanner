@@ -12,7 +12,7 @@ import pandas as pd
 from .data.base import DataProvider
 from .indicators import DayContext, add_indicators, build_context
 from .markets import US, Market
-from .strategies import Signal, Strategy
+from .strategies import MAX_CHASE_R, Position, Signal, Strategy
 
 
 @dataclass
@@ -80,17 +80,33 @@ def momentum_score(ctx: DayContext, rel_volume: float, last: float) -> float:
     return round(s, 2)
 
 
+def buy_status(strategy: Strategy, s: Signal, bars: pd.DataFrame, last: float) -> tuple[str, str | None]:
+    """BUY NOW while the setup is still buyable: the trade it started hasn't
+    hit its stop/target/exit, price is above the stop and no more than
+    MAX_CHASE_R past the entry, and it's still before the entry cutoff.
+    Otherwise 'triggered HH:MM' plus what happened to it."""
+    pos = Position.from_signal(s).replay(bars, strategy.exits)
+    label = f"triggered {s.time:%H:%M}"
+    if not pos.is_open:
+        return label, pos.exit_reason
+    if last <= s.stop:
+        return label, "below stop"
+    if (last - s.entry) / s.risk > MAX_CHASE_R:
+        return label, "ran past entry"
+    if bars.index[-1].time() > strategy.last_entry:
+        return label, "past entry cutoff"
+    return "BUY NOW", None
+
+
 def analyse(strategy: Strategy, cand: Candidate) -> dict:
     df, ctx = cand.bars, cand.ctx
     sigs: list[Signal] = strategy.entries(df, ctx)
-    out = {"status": "-", "signal": None, "watch": None, "qualifies": strategy.qualifies(ctx)}
+    out = {"status": "-", "signal": None, "watch": None, "outcome": None, "qualifies": strategy.qualifies(ctx)}
     if len(df):
-        last_ts = df.index[-1]
         if sigs:
             s = sigs[-1]
-            fresh = (last_ts - s.time) <= pd.Timedelta(minutes=3)
-            out["status"] = "BUY NOW" if fresh else f"triggered {s.time:%H:%M}"
             out["signal"] = s
+            out["status"], out["outcome"] = buy_status(strategy, s, df, cand.last)
         if not sigs or not out["status"].startswith("BUY"):
             w = strategy.watch_level(df, ctx)
             if w and cand.last < w[0] and (w[0] - cand.last) / w[0] <= 0.05:
@@ -189,7 +205,8 @@ def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: dat
                 "stop": sig.stop if sig else None,
                 "target": sig.target if sig else None,
                 "shares": st.position_size(sig) if sig else None,
-                "why": sig.reason if sig else (f"watch {a['watch'][1]}" if a["watch"] else ""),
+                "why": (f"[{a['outcome']}] " if a.get("outcome") else "") + sig.reason if sig
+                       else (f"watch {a['watch'][1]}" if a["watch"] else ""),
                 "source": c.source,
             })
     df = pd.DataFrame(rows)

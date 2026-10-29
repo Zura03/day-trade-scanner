@@ -222,6 +222,19 @@ after +1R a sell on a 1-min close below the 9 EMA. Everything is flat by
 `dtrader/strategies/__init__.py`. The scanner, backtester, hint, alerts and
 dashboard pick it up automatically.
 
+## What the statuses mean
+
+- **BUY NOW:** the setup triggered and is still buyable. The trade it started
+  hasn't hit its stop, target or trailing exit, price is above the stop and
+  no more than 0.5R past the entry, and it's before `no_new_entries_after`.
+- **SETTING UP:** within 5% of the price that would trigger the setup.
+- **triggered HH:MM [reason]:** it triggered but is no longer buyable. The
+  reason is what happened to the trade: stop, target, lost 9 EMA, ran past
+  entry, and so on.
+- **qualifies:** passes the strategy's daily filters, but no setup yet.
+
+The monitor sends one BUY alert per setup, at the current price.
+
 ## How the switch hint works
 
 It looks at each strategy's expectancy (average R per trade) over the last

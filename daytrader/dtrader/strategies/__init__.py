@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ..markets import US
-from .base import Position, Signal, Strategy
+from .base import MAX_CHASE_R, Position, Signal, Strategy
 from .bull_flag import BullFlag
 from .gap_and_go import GapAndGo
 from .orb import OpeningRangeBreakout
@@ -31,4 +31,4 @@ def all_strategies(cfg: dict) -> list[Strategy]:
     return [get_strategy(n, cfg) for n in REGISTRY]
 
 
-__all__ = ["REGISTRY", "Position", "Signal", "Strategy", "get_strategy", "all_strategies"]
+__all__ = ["MAX_CHASE_R", "REGISTRY", "Position", "Signal", "Strategy", "get_strategy", "all_strategies"]

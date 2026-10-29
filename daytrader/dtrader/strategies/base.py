@@ -22,6 +22,10 @@ def _t(s: str) -> time:
     return time(int(h), int(m))
 
 
+# Don't buy a triggered setup once price has run this many R past the entry.
+MAX_CHASE_R = 0.5
+
+
 @dataclass
 class Signal:
     symbol: str
@@ -105,6 +109,16 @@ class Position:
         if ts.time() >= _t(exits.get("time_exit", "15:50")):
             return self._close(ts, c, "time exit")
         return None
+
+    def replay(self, bars: pd.DataFrame, exits: dict) -> "Position":
+        """Run the trade forward through `bars` (entry-bar stop check, then
+        stop/target/trailing/time exits). Used by the scanner and the monitor."""
+        if self.entry_time in bars.index:
+            self.check_entry_bar(bars.loc[self.entry_time])
+        for ts, bar in bars[bars.index > self.entry_time].iterrows():
+            if not self.is_open or self.step(ts, bar, exits):
+                break
+        return self
 
     def check_entry_bar(self, bar: pd.Series) -> bool:
         """Breakout entries fill inside the entry bar; if that bar closed at or
