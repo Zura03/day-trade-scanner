@@ -224,6 +224,36 @@ after +1R a sell on a 1-min close below the 9 EMA. Everything is flat by
 `dtrader/strategies/__init__.py`. The scanner, backtester, hint, alerts and
 dashboard pick it up automatically.
 
+## Tracking the shares you buy
+
+The tool never places orders. When you buy, record it so it can tell you when
+to sell.
+
+- **Dashboard → 💼 My positions → Record a buy.** Pick one of the buyable
+  setups to prefill the symbol, price, stop, target and size, or enter it by
+  hand. Set the time you bought.
+- **Terminal:** `./run.sh buy JSWENERGY 100 505.2 --stop 491 --target 532`.
+  Add `--market india` for NSE. The stop defaults to 2% below your price and
+  the target to 2R above.
+
+Each position shows **HOLD** or **SELL NOW** with the reason, live P&L and the
+current stop. It uses the same exit rules as the backtest:
+- the stop or target is hit;
+- at +1R the stop moves to your entry;
+- after +1R, a 1-minute close below the 9 EMA is a sell;
+- the time exit flattens it at the end of the day;
+- a position held overnight is flagged, since these are day trades.
+
+The monitor pushes **"SELL: Sell your 100 JSWENERGY"** once when an exit
+triggers, and an INFO message when your stop moves. A red banner on the
+Picks tab lists anything to sell.
+
+When you've sold, press **Record sale** in the dashboard, or run
+`./run.sh sell JSWENERGY 512`. The trade moves to *Closed trades*, which
+shows realized P&L, win rate and average R. `./run.sh positions` prints
+everything in the terminal. Your positions are stored in
+`data/[india/]my_positions.json`, and closed trades in `my_trades.jsonl`.
+
 ## What the statuses mean
 
 - **BUY NOW:** the setup triggered and is still buyable. The trade it started

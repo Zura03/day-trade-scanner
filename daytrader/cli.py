@@ -10,6 +10,9 @@ Add --market india before the command for the Indian market (default: us).
   python cli.py backtest --days 10      replay recent sessions for every strategy
   python cli.py hint                    should I switch strategies?
   python cli.py monitor                 live BUY / SELL alerts (runs until Ctrl-C)
+  python cli.py buy JSWENERGY 100 505.2 --stop 491   record shares you bought
+  python cli.py positions               your positions: HOLD or SELL NOW (and why)
+  python cli.py sell JSWENERGY 512      record that you sold
   python cli.py auth                    log in to Schwab (US) / Groww or Zerodha (India, daily)
 
   python cli.py --market india scan     same commands for NSE
@@ -158,6 +161,50 @@ def cmd_monitor(cfg, args):
         print("\nMonitor stopped.")
 
 
+def cmd_buy(cfg, args):
+    from dtrader.portfolio import add_buy
+
+    m = cfg["market"]
+    stop = args.stop if args.stop else round(args.price * 0.98, 2)
+    target = args.target if args.target else round(args.price + 2 * (args.price - stop), 2)
+    row = add_buy(m, args.symbol, args.shares, args.price, stop, target, args.strategy or "manual")
+    print(f"Tracking {row['shares']} {row['symbol']} @ {row['entry']:.2f} (stop {row['stop']:.2f}, "
+          f"target {row['target']:.2f}), id {row['id']}. `positions` shows when to sell.")
+
+
+def cmd_positions(cfg, args):
+    from dtrader.portfolio import evaluate, load_closed, load_positions
+
+    rows = load_positions(cfg["market"])
+    if not rows:
+        print("No open positions. Record one with:  buy SYMBOL SHARES PRICE [--stop X --target Y]")
+    else:
+        p = provider(cfg, args)
+        for r in rows:
+            a = evaluate(r, p, cfg)
+            pnl = cfg["market"].fmt_money(a.pnl) if a.pnl is not None else "?"
+            last = f"{a.last:.2f}" if a.last else "?"
+            print(f"{a.action:9} {r['symbol']:10} {r['shares']:>6} sh  bought {r['entry']:.2f} at "
+                  f"{r['entry_time'][11:16]}  last {last}  {pnl}  stop now {a.stop:.2f}  - {a.reason}  [id {r['id']}]")
+    closed = load_closed(cfg["market"])
+    if len(closed):
+        print(f"\nClosed: {len(closed)} trades, {cfg['market'].fmt_money(closed['pnl'].sum())}, "
+              f"avg {closed['r_multiple'].mean():+.2f}R")
+
+
+def cmd_sell(cfg, args):
+    from dtrader.portfolio import load_positions, record_sell
+
+    rows = [r for r in load_positions(cfg["market"]) if args.id_or_symbol in (r["id"], r["symbol"])]
+    if not rows:
+        sys.exit("No open position with that symbol or id (see `positions`).")
+    if len(rows) > 1:
+        sys.exit("Several positions match that symbol - use the id from `positions`.")
+    done = record_sell(cfg["market"], rows[0]["id"], args.price)
+    print(f"Recorded sale of {done['shares']} {done['symbol']} @ {done['exit']:.2f}: "
+          f"{done['r_multiple']:+.2f}R, {cfg['market'].fmt_money(done['pnl'])}")
+
+
 def cmd_auth(cfg, args):
     from dtrader.data import get_provider
 
@@ -214,10 +261,18 @@ def main():
     s.add_argument("--session", action="store_true",
                    help="for the daily job: skip holidays, stop 5 min after the close")
     sub.add_parser("auth")
+    s = sub.add_parser("buy", help="record shares you bought; the tool tells you when to sell")
+    s.add_argument("symbol"); s.add_argument("shares", type=int); s.add_argument("price", type=float)
+    s.add_argument("--stop", type=float, help="default 2%% below price")
+    s.add_argument("--target", type=float, help="default 2R above price"); s.add_argument("--strategy")
+    sub.add_parser("positions", help="your open positions: HOLD or SELL NOW")
+    s = sub.add_parser("sell", help="record that you sold a position")
+    s.add_argument("id_or_symbol"); s.add_argument("price", type=float)
     args = ap.parse_args()
     cfg = load_config(args.market)
     {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest,
-     "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth}[args.cmd](cfg, args)
+     "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth, "buy": cmd_buy,
+     "positions": cmd_positions, "sell": cmd_sell}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

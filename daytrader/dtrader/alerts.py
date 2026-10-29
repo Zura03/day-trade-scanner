@@ -145,7 +145,28 @@ class Monitor:
                        f"last {c.last:.2f}, {a['watch'][1]} ({self.strategy.title})", self.cfg)
 
         self._manage_positions(day)
+        self._check_my_positions()
         self._save()
+
+    def _check_my_positions(self) -> None:
+        """Your real positions (recorded via dashboard/CLI): push SELL when an
+        exit triggers, and INFO when the stop moves. Read-only on the file."""
+        from .portfolio import evaluate, load_positions
+
+        for row in load_positions(self.m):
+            try:
+                adv = evaluate(row, self.p, self.cfg)
+            except Exception as e:
+                print(f"position check {row['symbol']}: {e}", file=sys.stderr, flush=True)
+                continue
+            for note in adv.notes:
+                if not self._seen(f"mine|{row['id']}|{note}"):
+                    notify("INFO", f"Your {row['symbol']}: {note}", f"stop now {adv.stop:.2f}", self.cfg)
+            if adv.action == "SELL NOW" and not self._seen(f"mine-sell|{row['id']}"):
+                pnl = self.m.fmt_money(adv.pnl) if adv.pnl is not None else "?"
+                notify("SELL", f"Sell your {row['shares']} {row['symbol']}",
+                       f"{adv.reason}. Last {adv.last:.2f}, {adv.r_now:+.2f}R, {pnl}. "
+                       "Record the sale in the dashboard (My positions).", self.cfg)
 
     def _open(self, s, last: float, day) -> None:
         """BUY alert + tracked position, with the backtest's rules: one open

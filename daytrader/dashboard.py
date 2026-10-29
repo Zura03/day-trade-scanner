@@ -168,8 +168,22 @@ with st.sidebar:
     st.caption("Educational tool, not financial advice. Always trade with a stop.")
 
 strategy = get_strategy(cfg["active_strategy"], cfg)
-tab_picks, tab_bt, tab_hint, tab_alerts, tab_guide = st.tabs(
-    ["🎯 Picks", "🧪 Backtest", "🔀 Switch hint", "🔔 Alerts & trades", "📘 Strategies"])
+tab_picks, tab_mine, tab_bt, tab_hint, tab_alerts, tab_guide = st.tabs(
+    ["🎯 Picks", "💼 My positions", "🧪 Backtest", "🔀 Switch hint", "🔔 Alerts & trades", "📘 Strategies"],
+    key="main_tab")  # keyed so the selected tab survives reruns (form inputs, buttons)
+
+
+def my_advice() -> list[tuple[dict, object]]:
+    from dtrader.portfolio import evaluate, load_positions
+
+    out = []
+    for row in load_positions(mk):
+        try:
+            out.append((row, evaluate(row, prov, cfg)))
+        except Exception as e:
+            out.append((row, type("A", (), {"action": "NO DATA", "reason": str(e)[:80], "last": None,
+                                            "stop": row["stop"], "pnl": None, "r_now": None, "notes": []})()))
+    return out
 
 
 # ---------------- chart helper --------------------------------------------
@@ -312,8 +326,122 @@ def picks():
                     width="stretch")
 
 
+ADVICE = my_advice()  # once per page load: evaluating fetches prices
+
 with tab_picks:
+    _sell = [(r, a) for r, a in ADVICE if a.action == "SELL NOW"]
+    if _sell:
+        st.error("**Sell now:** " + "; ".join(f"{r['shares']} {r['symbol']} - {a.reason}" for r, a in _sell)
+                 + ". Record the sale in *My positions*.")
     picks()
+
+# ---------------- my positions --------------------------------------------
+with tab_mine:
+    from datetime import datetime as _dt
+
+    from dtrader.portfolio import add_buy, delete_position, load_closed, record_sell, update_position
+
+    cur = mk.currency
+    advice = ADVICE
+    st.subheader(f"Open positions ({len(advice)})")
+    if advice:
+        st.dataframe(pd.DataFrame([{
+            "action": a.action, "symbol": r["symbol"], "shares": r["shares"], "bought": r["entry"],
+            "at": r["entry_time"][11:16], "last": a.last, "P&L": a.pnl, "R": a.r_now,
+            "stop now": a.stop, "target": r["target"], "why": a.reason,
+            "strategy": REGISTRY[r["strategy"]].title if r["strategy"] in REGISTRY else r["strategy"],
+        } for r, a in advice]).style.map(
+            lambda v: {"SELL NOW": "background-color:#b71c1c;color:white",
+                       "HOLD": "background-color:#1b5e20;color:white"}.get(v, ""), subset=["action"]),
+            width="stretch", hide_index=True,
+            column_config={k: st.column_config.NumberColumn(format="%.2f")
+                           for k in ("bought", "last", "P&L", "stop now", "target")}
+            | {"R": st.column_config.NumberColumn(format="%+.2f")})
+        st.caption("Exit rules (same as the backtest): stop; target; stop moves to your entry at +1R; after "
+                   "+1R sell on a 1-min close below the 9 EMA; flat by "
+                   f"{cfg.get('exits', {}).get('time_exit')}. The monitor pushes a SELL alert when one triggers.")
+        for r, a in advice:
+            with st.expander(f"{'🔴' if a.action == 'SELL NOW' else '🟢'} {r['symbol']} - {r['shares']} sh @ "
+                             f"{r['entry']:.2f} - {a.action}"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    px = st.number_input("Sold at", value=float(a.last or r["entry"]), step=0.05,
+                                         format="%.2f", key=f"sellpx_{r['id']}")
+                    if st.button("Record sale", key=f"sell_{r['id']}", type="primary"):
+                        done = record_sell(mk, r["id"], px, reason=a.reason if a.action == "SELL NOW" else "sold early")
+                        st.toast(f"Recorded: {done['symbol']} {done['r_multiple']:+.2f}R, {mk.fmt_money(done['pnl'])}")
+                        st.rerun()
+                with c2:
+                    ns = st.number_input("Stop", value=float(r["stop"]), step=0.05, format="%.2f", key=f"stop_{r['id']}")
+                    nt = st.number_input("Target", value=float(r["target"]), step=0.05, format="%.2f", key=f"tgt_{r['id']}")
+                    nsh = st.number_input("Shares", value=int(r["shares"]), min_value=1, step=1, key=f"sh_{r['id']}")
+                    b1, b2 = st.columns(2)
+                    if b1.button("Save changes", key=f"save_{r['id']}"):
+                        update_position(mk, r["id"], stop=ns, target=nt, shares=int(nsh))
+                        st.rerun()
+                    if b2.button("Delete (entered by mistake)", key=f"del_{r['id']}"):
+                        delete_position(mk, r["id"])
+                        st.rerun()
+    else:
+        st.caption("No open positions. Record a buy below and the tool will tell you when to sell.")
+
+    st.subheader("Record a buy")
+    scan_df = st.session_state.get(f"scan_{mk.key}", (pd.DataFrame(),))[0]
+    setups = buyable_now(scan_df, strategy.name) if len(scan_df) else pd.DataFrame()
+    labels = ["Manual entry"] + [f"{r.symbol} - {REGISTRY[r.strategy].title} (entry {r.entry:.2f})"
+                                 for r in setups.itertuples()]
+    src = st.selectbox("From a buyable setup", labels, key=f"buy_src_{mk.key}")
+    # Prefill by rebuilding the inputs (new keys) with the setup's values:
+    # more reliable than overwriting live widget state in the browser.
+    if st.session_state.get(f"buy_src_seen_{mk.key}") != src:
+        st.session_state[f"buy_src_seen_{mk.key}"] = src
+        st.session_state[f"buy_form_n_{mk.key}"] = st.session_state.get(f"buy_form_n_{mk.key}", 0) + 1
+        pref = {}
+        if src != "Manual entry":
+            r = setups.iloc[labels.index(src) - 1]
+            pref = {"sym": r["symbol"], "px": float(r["last"]), "stop": float(r["stop"]),
+                    "tgt": float(r["target"]), "sh": int(r["shares"]) if r["shares"] == r["shares"] else 1,
+                    "strat": r["strategy"]}
+        st.session_state[f"buy_pref_{mk.key}"] = pref
+    pref = st.session_state.get(f"buy_pref_{mk.key}", {})
+    fk = f"{mk.key}_{st.session_state.get(f'buy_form_n_{mk.key}', 0)}"
+    c1, c2, c3 = st.columns(3)
+    sym = c1.text_input("Symbol", value=pref.get("sym", ""), key=f"b_sym_{fk}").upper().strip()
+    shares = c2.number_input("Shares", min_value=1, step=1, value=pref.get("sh", 1), key=f"b_sh_{fk}")
+    price = c3.number_input(f"Buy price ({cur})", min_value=0.0, step=0.05, format="%.2f",
+                            value=pref.get("px", 0.0), key=f"b_px_{fk}")
+    c4, c5, c6 = st.columns(3)
+    stop = c4.number_input("Stop", min_value=0.0, step=0.05, format="%.2f", value=pref.get("stop", 0.0),
+                           key=f"b_stop_{fk}")
+    target = c5.number_input("Target", min_value=0.0, step=0.05, format="%.2f", value=pref.get("tgt", 0.0),
+                             key=f"b_tgt_{fk}")
+    strat_opts = ["manual"] + names
+    strat = c6.selectbox("Strategy", strat_opts, index=strat_opts.index(pref.get("strat", "manual")),
+                         key=f"b_strat_{fk}",
+                         format_func=lambda n: REGISTRY[n].title if n in REGISTRY else "Manual")
+    when = st.time_input(f"Bought at ({mk.tz_label})", value=mk.now().time().replace(second=0, microsecond=0),
+                         key=f"b_time_{fk}")
+    if price and not stop:
+        st.caption(f"Tip: a stop is required. 2% below your price would be {price * 0.98:.2f}, "
+                   f"and a 2R target {price * 1.04:.2f}.")
+    if st.button("Record buy", type="primary", key=f"b_go_{mk.key}"):
+        try:
+            row = add_buy(mk, sym, int(shares), price, stop, target, strat,
+                          when=_dt.combine(mk.now().date(), when, mk.tz))
+            st.toast(f"Tracking {row['shares']} {row['symbol']} @ {row['entry']:.2f}")
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+    closed = load_closed(mk)
+    st.subheader(f"Closed trades ({len(closed)})")
+    if len(closed):
+        st.dataframe(closed[["symbol", "shares", "entry", "exit", "entry_time", "exit_time", "r_multiple", "pnl",
+                             "exit_reason"]].iloc[::-1], width="stretch", hide_index=True)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Realized P&L", mk.fmt_money(closed["pnl"].sum()))
+        c2.metric("Win rate", f"{(closed['pnl'] > 0).mean() * 100:.0f}%")
+        c3.metric("Average R", f"{closed['r_multiple'].mean():+.2f}")
 
 # ---------------- backtest ------------------------------------------------
 with tab_bt:
