@@ -289,6 +289,9 @@ def picks():
             logs = []
             df, cands = scan(prov, cfg, strats, log=logs.append)
             st.session_state[key] = (df, cands, mk.now(), logs)
+            from dtrader.portfolio import remember_buyable
+
+            remember_buyable(mk, buyable_now(df, strategy.name))
     df, cands, ts, logs = st.session_state[key]
     st.caption(f"{mk.flag} Last scan {ts:%H:%M:%S} {mk.tz_label} - {logs[0] if logs else ''}")
     if df.empty:
@@ -386,22 +389,43 @@ with tab_mine:
         st.caption("No open positions. Record a buy below and the tool will tell you when to sell.")
 
     st.subheader("Record a buy")
+    from dtrader.portfolio import recent_buyable, setup_key
+
     scan_df = st.session_state.get(f"scan_{mk.key}", (pd.DataFrame(),))[0]
     setups = buyable_now(scan_df, strategy.name) if len(scan_df) else pd.DataFrame()
-    labels = ["Manual entry"] + [f"{r.symbol} - {REGISTRY[r.strategy].title} (entry {r.entry:.2f})"
-                                 for r in setups.itertuples()]
-    src = st.selectbox("From a buyable setup", labels, key=f"buy_src_{mk.key}")
+    current = {setup_key(r): r.to_dict() for _, r in setups.iterrows()}
+    recent = {k: v for k, v in recent_buyable(mk, minutes=60).items() if k not in current}
+    snap_key = f"buy_snap_{mk.key}"  # the setup you picked stays listed until you record or change it
+    pinned = st.session_state.get(snap_key)
+    choices = {"manual": None, **current, **recent}
+    if pinned and pinned[0] not in choices:
+        choices[pinned[0]] = pinned[1]
+
+    def label(k):
+        if k == "manual":
+            return "Manual entry"
+        r = choices[k]
+        tail = "" if k in current else f" - was buyable until {r['last_seen'][11:16]}" if "last_seen" in r else " - no longer buyable"
+        return f"{r['symbol']} - {REGISTRY[r['strategy']].title} (entry {r['entry']:.2f}, {r['triggered_at']}){tail}"
+
+    src = st.selectbox("From a buyable setup (current, or buyable in the last hour)", list(choices),
+                       key=f"buy_src_{mk.key}", format_func=label)
     # Prefill by rebuilding the inputs (new keys) with the setup's values:
     # more reliable than overwriting live widget state in the browser.
     if st.session_state.get(f"buy_src_seen_{mk.key}") != src:
         st.session_state[f"buy_src_seen_{mk.key}"] = src
         st.session_state[f"buy_form_n_{mk.key}"] = st.session_state.get(f"buy_form_n_{mk.key}", 0) + 1
         pref = {}
-        if src != "Manual entry":
-            r = setups.iloc[labels.index(src) - 1]
-            pref = {"sym": r["symbol"], "px": float(r["last"]), "stop": float(r["stop"]),
-                    "tgt": float(r["target"]), "sh": int(r["shares"]) if r["shares"] == r["shares"] else 1,
-                    "strat": r["strategy"]}
+        if src != "manual":
+            r = choices[src]
+            st.session_state[snap_key] = (src, r)
+            live = scan_df[scan_df["symbol"] == r["symbol"]]["last"] if len(scan_df) else []
+            px = float(live.iloc[0]) if len(live) else float(r["last"])
+            sh = r.get("shares")
+            pref = {"sym": r["symbol"], "px": px, "stop": float(r["stop"]), "tgt": float(r["target"]),
+                    "sh": int(sh) if sh == sh and sh else 1, "strat": r["strategy"]}
+        else:
+            st.session_state.pop(snap_key, None)
         st.session_state[f"buy_pref_{mk.key}"] = pref
     pref = st.session_state.get(f"buy_pref_{mk.key}", {})
     fk = f"{mk.key}_{st.session_state.get(f'buy_form_n_{mk.key}', 0)}"
@@ -428,6 +452,7 @@ with tab_mine:
         try:
             row = add_buy(mk, sym, int(shares), price, stop, target, strat,
                           when=_dt.combine(mk.now().date(), when, mk.tz))
+            st.session_state.pop(snap_key, None)
             st.toast(f"Tracking {row['shares']} {row['symbol']} @ {row['entry']:.2f}")
             st.rerun()
         except ValueError as e:

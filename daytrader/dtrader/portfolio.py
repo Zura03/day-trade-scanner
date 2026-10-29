@@ -156,3 +156,46 @@ def evaluate(row: dict, provider, cfg: dict) -> Advice:
     if pos.trailing:
         hint += ", trailing: sell on a 1-min close below the 9 EMA"
     return Advice("HOLD", hint, last, pos.stop, pnl, r_now, notes)
+
+
+# ---- recently buyable setups (for recording a buy after a setup expires) ----
+def _recent_path(m: Market):
+    return m.path("recent_buyable.json")
+
+
+def setup_key(row) -> str:
+    return f"{row['symbol']}|{row['strategy']}|{row['triggered_at']}"
+
+
+def remember_buyable(market: str | Market, buyable: pd.DataFrame) -> None:
+    """Record every BUY NOW setup seen today, with when it was last buyable,
+    so it can still be picked for a few minutes after it stops being buyable."""
+    m = get_market(market)
+    today, now = m.now().date().isoformat(), m.now().isoformat(timespec="seconds")
+    p = _recent_path(m)
+    try:
+        data = json.loads(p.read_text()) if p.exists() else {}
+    except json.JSONDecodeError:
+        data = {}
+    day = data.get(today, {})
+    for _, r in buyable.iterrows():
+        k = setup_key(r)
+        prev = day.get(k, {})
+        day[k] = {"symbol": r["symbol"], "strategy": r["strategy"], "triggered_at": r["triggered_at"],
+                  "entry": float(r["entry"]), "stop": float(r["stop"]), "target": float(r["target"]),
+                  "shares": int(r["shares"]) if r["shares"] == r["shares"] else 1,
+                  "last": float(r["last"]), "first_seen": prev.get("first_seen", now), "last_seen": now}
+    p.write_text(json.dumps({today: day}, indent=1))  # only today's setups are kept
+
+
+def recent_buyable(market: str | Market, minutes: int = 60) -> dict[str, dict]:
+    """Setups that were buyable today within the last `minutes`, newest first."""
+    m = get_market(market)
+    p = _recent_path(m)
+    try:
+        day = json.loads(p.read_text()).get(m.now().date().isoformat(), {}) if p.exists() else {}
+    except json.JSONDecodeError:
+        return {}
+    cutoff = m.now() - pd.Timedelta(minutes=minutes)
+    keep = {k: v for k, v in day.items() if datetime.fromisoformat(v["last_seen"]) >= cutoff}
+    return dict(sorted(keep.items(), key=lambda kv: kv[1]["last_seen"], reverse=True))

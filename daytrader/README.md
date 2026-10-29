@@ -231,7 +231,10 @@ to sell.
 
 - **Dashboard → 💼 My positions → Record a buy.** Pick one of the buyable
   setups to prefill the symbol, price, stop, target and size, or enter it by
-  hand. Set the time you bought.
+  hand. Set the time you bought. The list also includes setups that were
+  buyable in the last hour, marked "was buyable until HH:MM". Once you pick
+  one, it stays selected, with your typed values, even if a refresh drops it
+  from BUY NOW.
 - **Terminal:** `./run.sh buy JSWENERGY 100 505.2 --stop 491 --target 532`.
   Add `--market india` for NSE. The stop defaults to 2% below your price and
   the target to 2R above.
