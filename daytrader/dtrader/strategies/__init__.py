@@ -1,6 +1,7 @@
 """Strategy registry. To add a strategy: subclass Strategy, add it below."""
 from __future__ import annotations
 
+from ..markets import US
 from .base import Position, Signal, Strategy
 from .bull_flag import BullFlag
 from .gap_and_go import GapAndGo
@@ -22,6 +23,7 @@ def get_strategy(name: str, cfg: dict) -> Strategy:
         exits=cfg.get("exits"),
         risk=cfg.get("risk"),
         universe=cfg.get("universe"),
+        market=cfg.get("market") or US,
     )
 
 

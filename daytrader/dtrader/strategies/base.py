@@ -8,12 +8,13 @@ live alert monitor so the two always agree.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import time
+from datetime import datetime, time
 
 import numpy as np
 import pandas as pd
 
 from ..indicators import DayContext
+from ..markets import US, Market
 
 
 def _t(s: str) -> time:
@@ -105,6 +106,14 @@ class Position:
             return self._close(ts, c, "time exit")
         return None
 
+    def check_entry_bar(self, bar: pd.Series) -> bool:
+        """Breakout entries fill inside the entry bar; if that bar closed at or
+        below the stop, count it as stopped there (backtest and live agree)."""
+        if self.is_open and bar["close"] <= self.stop:
+            self._close(self.entry_time, self.stop, "stop")
+            return True
+        return False
+
     def _close(self, ts, px, reason) -> str:
         self.exit_time, self.exit_price, self.exit_reason = ts, float(px), reason
         return reason
@@ -134,7 +143,8 @@ class Strategy:
     max_risk_pct = 10.0  # skip setups whose stop is wider than this % of price
 
     def __init__(self, params: dict | None = None, exits: dict | None = None,
-                 risk: dict | None = None, universe: dict | None = None):
+                 risk: dict | None = None, universe: dict | None = None, market: Market = US):
+        self.market = market
         self.p = {**self.defaults, **(params or {})}
         self.exits = exits or {}
         self.risk_cfg = risk or {}
@@ -169,6 +179,21 @@ class Strategy:
     def regular_rows(self, df: pd.DataFrame) -> np.ndarray:
         return np.flatnonzero(df["regular"].to_numpy())
 
+    def opening_range(self, df: pd.DataFrame, minutes: int) -> tuple[int, float, float] | None:
+        """(first row after the range, range high, range low) for the first
+        `minutes` minutes after the market open - by clock time, so missing
+        bars on thin stocks don't stretch the range."""
+        reg = self.regular_rows(df)
+        if not len(reg):
+            return None
+        day = df.index[reg[0]].date()
+        end = pd.Timestamp(datetime.combine(day, self.market.open, self.market.tz)) + pd.Timedelta(minutes=minutes)
+        inside = reg[df.index[reg] < end]
+        after = reg[df.index[reg] >= end]
+        if not len(inside) or not len(after):
+            return None  # range not finished yet
+        return int(after[0]), float(df["high"].iloc[inside].max()), float(df["low"].iloc[inside].min())
+
     def entries(self, df: pd.DataFrame, ctx: DayContext, after: pd.Timestamp | None = None) -> list[Signal]:
         """All entry signals in a session (bars with indicators added)."""
         if not self.qualifies(ctx):
@@ -184,6 +209,11 @@ class Strategy:
             if s:
                 out.append(s)
         return out
+
+    @property
+    def max_trades_per_day(self) -> int:
+        """Trades per symbol per session (backtest and live monitor)."""
+        return int(self.exits.get("max_trades_per_day", 2))
 
     def position_size(self, s: Signal) -> int:
         risk_dollars = float(self.risk_cfg.get("risk_per_trade", 100))

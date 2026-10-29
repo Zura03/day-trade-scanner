@@ -25,8 +25,11 @@ def load_journal(market: str | Market | None = None) -> pd.DataFrame:
     rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
     if not rows:
         return pd.DataFrame()
+    m = get_market(market)
     j = pd.DataFrame(rows)
-    j["entry_time"] = pd.to_datetime(j["entry_time"])
+    # a crash between journaling and saving state can replay a close: keep one
+    j = j.drop_duplicates(subset=["symbol", "strategy", "entry_time"], keep="last")
+    j["entry_time"] = m.parse_times(j["entry_time"])
     j["day"] = j["entry_time"].dt.date
     j["r"] = j["r_multiple"]
     j["source"] = "live"

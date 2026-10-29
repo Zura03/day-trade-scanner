@@ -14,20 +14,33 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .data.base import DataProvider, trading_days_back
+from .data.base import DataProvider
 from .indicators import add_indicators, build_context
 from .markets import US, Market, get_market
 from .scanner import history_symbols
 from .strategies import Position, Strategy
 
 
+def completed_sessions(market: Market, n: int) -> list[date]:
+    """Last n sessions that have finished. Today counts only after its close;
+    replaying a half-finished day would force-close open trades at whatever
+    the price is now."""
+    days = market.sessions_back(n + 1)
+    today = market.now().date()
+    if days and days[-1] == today:
+        hours = market.session_hours(today)
+        if hours is None or market.now() < hours[1]:
+            days = days[:-1]
+    return days[-n:]
+
+
 def trades_csv(market: Market = US):
     return market.path("backtest_trades.csv")
 
 
-def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.001,
-                 max_trades: int = 2) -> list[Position]:
+def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.001) -> list[Position]:
     trades: list[Position] = []
+    max_trades = strategy.max_trades_per_day
     sigs = strategy.entries(df, ctx)
     if not sigs:
         return trades
@@ -42,10 +55,7 @@ def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.
         i = pos_of[s.time]
         p = Position.from_signal(s, strategy.position_size(s))
         p.entry = s.entry * (1 + slippage)
-        # Breakout entries fill intrabar: if that same bar closed below the
-        # stop we assume it was stopped out there.
-        if df["close"].iat[i] <= p.stop:
-            p._close(s.time, p.stop, "stop")
+        p.check_entry_bar(df.iloc[i])
         j = i + 1
         while p.is_open and j <= reg_last:
             p.step(df.index[j], df.iloc[j], strategy.exits)
@@ -76,7 +86,7 @@ def _mover_days(d: pd.DataFrame, sessions: list[date], u: dict, min_avg_vol: flo
             continue
         if not (u.get("min_price", 1) <= r["prev_close"] <= u.get("max_price", 20)):
             continue
-        if (r["avg_vol"] or 0) < min_avg_vol:
+        if min_avg_vol and not r["avg_vol"] >= min_avg_vol:  # NaN (no history) fails too
             continue
         gap, prev = abs(r["gap_pct"]), (r["prev_day_pct"] or 0)
         if gap >= u.get("min_gap_pct", 5) or prev >= 20:
@@ -95,7 +105,7 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
     bt = cfg.get("backtest") or {}
     slip = float(bt.get("slippage_pct", 0.1)) / 100
     max_per_day = int(bt.get("max_symbols_per_day", 60))
-    sessions = trading_days_back(days + 1, provider)[-days:]
+    sessions = completed_sessions(provider.market, days)
 
     universe = None
     if symbols is None and bt.get("universe", "market") == "market":
@@ -140,7 +150,8 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
             if not len(prior):
                 continue
             ctx = build_context(sym, dd, bars, float(prior["close"].iloc[-1]),
-                                float(prior["volume"].tail(10).mean()), market=provider.market)
+                                float(prior["volume"].tail(10).mean()), market=provider.market,
+                                premarket_volume_known=provider.premarket_volume_known)
             df = add_indicators(bars, provider.market)
             if not df["regular"].any():
                 continue
@@ -189,9 +200,12 @@ def summarize(trades: pd.DataFrame, strategies: list[str] | None = None) -> pd.D
 
 
 def load_last_trades(market: str | Market | None = None) -> pd.DataFrame:
-    path = trades_csv(get_market(market))
+    m = get_market(market)
+    path = trades_csv(m)
     if path.exists():
-        t = pd.read_csv(path, parse_dates=["entry_time", "exit_time"])
+        t = pd.read_csv(path)
+        for col in ("entry_time", "exit_time"):
+            t[col] = m.parse_times(t[col])
         t["day"] = pd.to_datetime(t["day"]).dt.date
         return t
     return pd.DataFrame()

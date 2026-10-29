@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import numpy as np
+
 from .base import Strategy
 
 
@@ -30,8 +32,9 @@ class VwapReclaim(Strategy):
         n = self._bars_below(df, i - 1)
         if n < self.p["min_bars_below"]:
             return None
-        if df["volume"].iat[i] < self.p["vol_mult"] * df["vol_avg20"].iat[i - 1]:
-            return None
+        avg = df["vol_avg20"].iat[i - 1]
+        if np.isnan(avg) or df["volume"].iat[i] < self.p["vol_mult"] * avg:
+            return None  # no volume baseline yet, or not enough volume
         stop = float(df["low"].iloc[i - n:i + 1].min()) - 0.01
         return self.make_signal(ctx, df.index[i], c, stop,
                                 f"Reclaimed VWAP {v:.2f} after {n} bars below")

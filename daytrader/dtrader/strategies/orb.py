@@ -18,12 +18,7 @@ class OpeningRangeBreakout(Strategy):
         return ctx.gap_pct >= self.p["min_gap_pct"]
 
     def _range(self, df):
-        reg = self.regular_rows(df)
-        n = int(self.p["range_minutes"])
-        if len(reg) < n:
-            return None
-        r = reg[:n]
-        return reg[0] + n, df["high"].iloc[r].max(), df["low"].iloc[r].min()
+        return self.opening_range(df, int(self.p["range_minutes"]))
 
     def check(self, df, i, ctx):
         rng = self._range(df)

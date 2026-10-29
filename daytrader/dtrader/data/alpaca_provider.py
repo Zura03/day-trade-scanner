@@ -21,7 +21,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import httpx
 import pandas as pd
 
-from .base import BAR_COLS, CACHE_DIR, NY, DataProvider, empty_bars, now_ny
+from .base import BAR_COLS, CACHE_DIR, NY, DataProvider, empty_bars, finished_bars, now_ny, read_cache
 
 DATA_URL = "https://data.alpaca.markets"
 TRADING_URLS = ("https://paper-api.alpaca.markets", "https://api.alpaca.markets")
@@ -226,8 +226,8 @@ class AlpacaProvider(DataProvider):
     def daily_many(self, symbols: list[str], days: int = 60) -> dict[str, pd.DataFrame]:
         """Daily bars for thousands of symbols, 100 per request, cached daily."""
         path = CACHE_DIR / self.name / f"daily_many_{now_ny().date()}_{days}_{len(symbols)}.pkl"
-        if path.exists():
-            return pd.read_pickle(path)
+        if (cached := read_cache(path)) is not None:
+            return cached
         now = datetime.now(NY)
         feed = "iex" if self.feed == "iex" else "sip"
         end = self._sip_end(now) if feed == "sip" else now
@@ -246,8 +246,9 @@ class AlpacaProvider(DataProvider):
         today = now_ny().date()
         for s in symbols:
             p = CACHE_DIR / self.name / f"{s}_{day.isoformat()}.pkl"
-            if day < today and p.exists():
-                out[s] = pd.read_pickle(p)
+            cached = read_cache(p) if day < today else None
+            if cached is not None:
+                out[s] = cached
             else:
                 missing.append(s)
         start = datetime.combine(day, time(4, 0), NY)
@@ -257,7 +258,7 @@ class AlpacaProvider(DataProvider):
             got = self._minute_bars(chunk, start, end)
             for s in chunk:
                 df = got.get(s, empty_bars())
-                out[s] = df
+                out[s] = finished_bars(df, self.market) if day == today else df
                 if day < today and len(df):
                     p = CACHE_DIR / self.name / f"{s}_{day.isoformat()}.pkl"
                     p.parent.mkdir(parents=True, exist_ok=True)

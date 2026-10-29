@@ -78,6 +78,21 @@ class Market:
             days = days[:-1]
         return days[-n:]
 
+    def parse_times(self, values):
+        """Timestamps saved as text -> market-local datetimes. Goes through UTC
+        so mixed offsets (US trades on both sides of a DST change) parse."""
+        import pandas as pd
+
+        return pd.to_datetime(values, utc=True).dt.tz_convert(self.tz)
+
+    def token_reset(self) -> datetime:
+        """Most recent 6:00 local reset of Indian broker access tokens."""
+        from datetime import timedelta
+
+        now = self.now()
+        reset = datetime.combine(now.date(), time(6, 0), self.tz)
+        return reset if now >= reset else reset - timedelta(days=1)
+
     def fmt_money(self, v: float) -> str:
         return f"{'-' if v < 0 else '+'}{self.currency}{abs(v):,.0f}"
 

@@ -139,11 +139,7 @@ class Monitor:
             a = analyse(self.strategy, c)
             s = a["signal"]
             if a["status"] == "BUY NOW" and s and not self._seen(f"buy|{s.symbol}|{s.strategy}|{s.time}"):
-                sh = self.strategy.position_size(s)
-                notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
-                       f"stop {s.stop:.2f} / target {s.target:.2f} / {sh} sh "
-                       f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}", self.cfg)
-                self.state["positions"].append(Position.from_signal(s, sh).to_dict())
+                self._open(s, c.last, day)
             elif a["status"] == "SETTING UP" and a["watch"] and not self._seen(f"watch|{c.symbol}|{day}|{self.strategy.name}"):
                 notify("WATCH", f"{c.symbol} near trigger {a['watch'][0]:.2f}",
                        f"last {c.last:.2f}, {a['watch'][1]} ({self.strategy.title})", self.cfg)
@@ -151,9 +147,36 @@ class Monitor:
         self._manage_positions(day)
         self._save()
 
+    def _open(self, s, last: float, day) -> None:
+        """BUY alert + tracked position, with the backtest's rules: one open
+        position per symbol, max trades per symbol per day, and a fill at the
+        current price (skip if it has already run more than 0.5R past the trigger)."""
+        open_syms = {d["symbol"] for d in self.state["positions"]}
+        taken = self.state.setdefault("trades_today", {})
+        taken = {k: v for k, v in taken.items() if k.startswith(f"{day}|")}
+        self.state["trades_today"] = taken
+        tkey = f"{day}|{s.symbol}"
+        if s.symbol in open_syms or taken.get(tkey, 0) >= self.strategy.max_trades_per_day:
+            return
+        fill = max(s.entry, last)
+        if fill - s.entry > 0.5 * s.risk:
+            notify("INFO", f"{s.symbol}: missed entry",
+                   f"triggered {s.entry:.2f} but already {last:.2f} (>0.5R past) - not chasing", self.cfg)
+            return
+        s.entry = round(fill, 4)
+        sh = self.strategy.position_size(s)
+        if sh <= 0:
+            return
+        notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
+               f"stop {s.stop:.2f} / target {s.target:.2f} / {sh} sh "
+               f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}", self.cfg)
+        self.state["positions"].append(Position.from_signal(s, sh).to_dict())
+        taken[tkey] = taken.get(tkey, 0) + 1
+
     def _manage_positions(self, day) -> None:
         still_open = []
-        for d in self.state["positions"]:
+        positions = list(self.state["positions"])
+        for idx, d in enumerate(positions):
             p = Position.from_dict(d)
             if p.entry_time.date() != day:  # left over from a prior session: drop it
                 continue
@@ -168,8 +191,10 @@ class Monitor:
             # replay from a fresh copy of the original trade each time
             replay = Position(p.symbol, p.strategy, p.entry_time, p.entry, p.initial_stop,
                               p.target, p.initial_stop, p.shares)
+            if p.entry_time in bars.index:
+                replay.check_entry_bar(bars.loc[p.entry_time])
             for ts, bar in bars[bars.index > p.entry_time].iterrows():
-                if replay.step(ts, bar, strat.exits):
+                if not replay.is_open or replay.step(ts, bar, strat.exits):
                     break
             for note in replay.notes[len(p.notes):]:
                 if not self._seen(f"note|{p.symbol}|{p.entry_time}|{note}"):
@@ -185,6 +210,9 @@ class Monitor:
                        f"(entry {replay.entry:.2f})", self.cfg)
             with open(journal_path(self.m), "a") as f:
                 f.write(json.dumps(replay.to_dict()) + "\n")
+            # persist right away so a crash can't replay this close (load_journal also dedups)
+            self.state["positions"] = still_open + positions[idx + 1:]
+            self._save()
         self.state["positions"] = still_open
 
 
@@ -233,6 +261,7 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
             notify("INFO", f"{broker.title()} login needed",
                    f"Using free Yahoo data until then. {india_login_hint(broker)}", cfg)
     last_broker_check = _time.time()
+    failures = 0
     while True:
         now = m.now()
         if close_at and now >= close_at:
@@ -249,8 +278,18 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
         if once or in_session(now, m):
             try:
                 mon.tick()
+                failures = 0
             except Exception as e:
+                failures += 1
                 print(f"tick error: {e}", file=sys.stderr, flush=True)
+                if m.key == "india" and mon.p.name in ("groww", "kite") and failures >= 2:
+                    from .data.yf_provider import YFinanceIndiaProvider
+
+                    broker, failures = mon.p.name, 0
+                    mon.p, mon.cands = YFinanceIndiaProvider(), []
+                    last_broker_check = _time.time()
+                    notify("INFO", f"{broker.title()} data failing - using Yahoo",
+                           f"{str(e)[:120]}. Will switch back when {broker.title()} works again.", cfg)
         if once:
             return
         _time.sleep(poll if in_session(now, m) else (60 if close_at else 300))

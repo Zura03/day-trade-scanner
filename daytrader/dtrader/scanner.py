@@ -157,7 +157,8 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
             continue
         if not len(bars) or np.isnan(prev_close):
             continue
-        ctx = build_context(sym, day, bars, prev_close, avg_vol, fl, market=m)
+        ctx = build_context(sym, day, bars, prev_close, avg_vol, fl, market=m,
+                            premarket_volume_known=provider.premarket_volume_known)
         last = float(bars["close"].iloc[-1])
         rel = float(bars["volume"].sum() / avg_vol) if avg_vol else rv
         out.append(Candidate(sym, ctx, add_indicators(bars, m), last, rel, sources[sym]))

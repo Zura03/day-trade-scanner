@@ -8,7 +8,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 if [ ! -x .venv/bin/python ]; then
-  PY=$(command -v python3.12 || command -v /opt/homebrew/bin/python3.12 || command -v python3)
+  PY=""
+  for c in python3.13 python3.12 python3.11 python3.10 /opt/homebrew/bin/python3.12 python3; do
+    p=$(command -v "$c" 2>/dev/null) || continue
+    if "$p" -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then PY=$p; break; fi
+  done
+  if [ -z "$PY" ]; then
+    echo "Python 3.10+ is required (some data libraries need it). Install it with: brew install python@3.12" >&2
+    exit 1
+  fi
   echo "Creating virtualenv with $PY ..."
   "$PY" -m venv .venv
   .venv/bin/pip install -q --upgrade pip

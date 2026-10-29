@@ -27,9 +27,45 @@ def empty_bars(tz: ZoneInfo = NY) -> pd.DataFrame:
     return pd.DataFrame(columns=BAR_COLS, index=pd.DatetimeIndex([], tz=tz))
 
 
+def read_cache(path):
+    """Load a cached pickle, or None if it's missing or unreadable (e.g. written
+    by a different pandas version). Unreadable files are deleted so they get
+    refetched instead of failing every run."""
+    if not path.exists():
+        return None
+    try:
+        return pd.read_pickle(path)
+    except Exception:
+        path.unlink(missing_ok=True)
+        return None
+
+
+def finished_bars(df: pd.DataFrame, market: Market) -> pd.DataFrame:
+    """Drop the minute that is still forming. Live signals must use the same
+    closed bars the backtest uses, or a mid-minute price can fire an entry
+    that is gone when the bar closes."""
+    if not len(df):
+        return df
+    cutoff = pd.Timestamp(market.now()) - pd.Timedelta(minutes=1)
+    return df[df.index <= cutoff]
+
+
+def rank_movers(q: pd.DataFrame, limit: int) -> list[str]:
+    """Top gainers by % change, then the most unusual volume (quotes frame)."""
+    if q.empty:
+        return []
+    q = q[(q["prev_close"] > 0) & (q["last"] > 0)].copy()
+    q["chg"] = q["last"] / q["prev_close"] - 1
+    q["rv"] = q["volume"] / q["avg_volume"].where(q["avg_volume"] > 0)
+    top = list(q.sort_values("chg", ascending=False).index[:limit])
+    active = [s for s in q.sort_values("rv", ascending=False).index[:limit // 2] if s not in top]
+    return (top + active)[:limit]
+
+
 class DataProvider(ABC):
     name = "base"
     market: Market = US
+    premarket_volume_known = True   # False when the source reports 0 for premarket volume
 
     # ---- required -----------------------------------------------------
     @abstractmethod
@@ -53,36 +89,32 @@ class DataProvider(ABC):
         """1-min bars for one session. Past days are cached."""
         today = self.market.now().date()
         path = CACHE_DIR / self.name / f"{symbol}_{day.isoformat()}.pkl"
-        if day < today and path.exists():
-            return pd.read_pickle(path)
+        if day < today and (cached := read_cache(path)) is not None:
+            return cached
         df = self._fetch_intraday(symbol, day, day)
         df = df[df.index.date == day] if len(df) else df
         if day < today and len(df):
             path.parent.mkdir(parents=True, exist_ok=True)
             df.to_pickle(path)
-        return df
+        return finished_bars(df, self.market) if day == today else df
 
-    def intraday_range(self, symbol: str, days: list[date]) -> dict[date, pd.DataFrame]:
-        """Bars for several sessions, fetching uncached days in one request."""
-        out: dict[date, pd.DataFrame] = {}
-        missing = []
-        today = self.market.now().date()
-        for d in days:
-            p = CACHE_DIR / self.name / f"{symbol}_{d.isoformat()}.pkl"
-            if d < today and p.exists():
-                out[d] = pd.read_pickle(p)
-            else:
-                missing.append(d)
-        if missing:
-            df = self._fetch_intraday(symbol, min(missing), max(missing))
-            for d in missing:
-                part = df[df.index.date == d] if len(df) else empty_bars(self.market.tz)
-                out[d] = part
-                if d < today and len(part):
-                    p = CACHE_DIR / self.name / f"{symbol}_{d.isoformat()}.pkl"
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    part.to_pickle(p)
-        return out
+    def _cached_daily(self, symbol: str, days: int, fetch) -> pd.DataFrame:
+        """Daily bars cached per symbol per day. A copy saved during today's
+        session holds a partial bar for today, so after the close it is
+        refetched once to pick up the finished day."""
+        now = self.market.now()
+        path = CACHE_DIR / self.name / "daily" / f"{symbol}_{now.date()}.pkl"
+        if (d := read_cache(path)) is not None:
+            hours = self.market.session_hours(now.date())
+            saved = datetime.fromtimestamp(path.stat().st_mtime, self.market.tz)
+            stale = hours is not None and saved < hours[1] <= now
+            if not stale and len(d) >= min(days, 100):
+                return d.tail(days)
+        d = fetch(max(days, 60))
+        if len(d):  # don't cache a failed fetch for the whole day
+            path.parent.mkdir(parents=True, exist_ok=True)
+            d.to_pickle(path)
+        return d.tail(days)
 
     def session_hours(self, day: date) -> tuple[datetime, datetime] | None:
         """Regular-session open/close for `day` (market tz), None if closed.
@@ -142,11 +174,6 @@ class DataProvider(ABC):
         if dirty:
             FLOAT_CACHE.write_text(json.dumps(cache))
         return out
-
-
-def trading_days_back(n: int, provider: DataProvider) -> list[date]:
-    """Last n completed-or-current trading sessions (exchange calendar)."""
-    return provider.market.sessions_back(n)
 
 
 def to_tz_index(df: pd.DataFrame, tz: ZoneInfo = NY) -> pd.DataFrame:

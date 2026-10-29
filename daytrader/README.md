@@ -145,8 +145,14 @@ starts at login and restarts if it crashes.
 
 The dashboard is reachable from other devices only when `DASHBOARD_PASSWORD`
 is set in `.env`. Without it, the dashboard binds to localhost only. After you
-log in, the URL carries a sign-in token, so you can bookmark it. Anyone with
-that bookmarked URL can get in, so don't share it.
+log in, the URL carries a sign-in token, so you can bookmark it. The token is
+valid for 30 days, and anyone with that URL can get in until it expires, so
+don't share it. To sign out every device at once, delete
+`data/dashboard_secret`.
+
+The Wi-Fi address is plain HTTP, so someone on the same network could read
+the password or token. The Tailscale address is encrypted, so prefer it,
+even at home.
 
 **Same Wi-Fi:** run `./scripts/autostart.sh status`, then open the
 "Phone on same Wi-Fi" address it prints, for example

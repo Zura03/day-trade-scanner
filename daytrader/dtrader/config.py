@@ -45,9 +45,13 @@ def load_config(market: str | Market | None = None) -> dict[str, Any]:
     base = {k: v for k, v in raw.items() if k not in MARKETS}
     cfg = _merge(base, raw.get(m.key) or {}) if m.key != "us" else base
     cfg["market"] = m
+    from .strategies import REGISTRY  # late import: strategies import config indirectly
+
     state = load_state(m)
-    if state.get("active_strategy"):
+    if state.get("active_strategy") in REGISTRY:  # ignore stale/renamed names
         cfg["active_strategy"] = state["active_strategy"]
+    if cfg.get("active_strategy") not in REGISTRY:
+        cfg["active_strategy"] = next(iter(REGISTRY))
     return cfg
 
 

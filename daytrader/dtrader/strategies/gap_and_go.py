@@ -18,19 +18,18 @@ class GapAndGo(Strategy):
     defaults = {"min_gap_pct": 10, "min_premarket_volume": 100_000, "open_range_minutes": 5}
 
     def qualifies(self, ctx):
-        # Yahoo reports 0 premarket volume, so 0 means "unknown", not "none".
-        pv = ctx.premarket_volume
-        return ctx.gap_pct >= self.p["min_gap_pct"] and (pv == 0 or pv >= self.p["min_premarket_volume"])
+        pv = ctx.premarket_volume  # None = the data source can't report it
+        return ctx.gap_pct >= self.p["min_gap_pct"] and (pv is None or pv >= self.p["min_premarket_volume"])
 
     def _level(self, df, ctx, i=None):
         """(trigger level, first bar allowed to trigger, label)."""
         if not np.isnan(ctx.premarket_high):
             return ctx.premarket_high, 0, "premarket high"
-        reg = self.regular_rows(df)
         n = int(self.p["open_range_minutes"])
-        if len(reg) < n:
+        rng = self.opening_range(df, n)
+        if not rng:
             return None
-        return float(df["high"].iloc[reg[:n]].max()), reg[0] + n, f"{n}-min opening high"
+        return rng[1], rng[0], f"{n}-min opening high"
 
     def check(self, df, i, ctx):
         lv = self._level(df, ctx)

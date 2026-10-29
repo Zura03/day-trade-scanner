@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlparse
 import pandas as pd
 
 from ..markets import INDIA, india_fo_symbols
-from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars
+from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, rank_movers
 
 TOKEN_PATH = INDIA.path("kite_token.json")
 HIST_GAP = 0.35  # historical API allows ~3 requests/second
@@ -32,10 +32,7 @@ def token_valid_today() -> str | None:
         d = json.loads(TOKEN_PATH.read_text())
     except json.JSONDecodeError:
         return None
-    now = INDIA.now()
-    reset = datetime.combine(now.date(), time(6, 0), INDIA.tz)
-    if now < reset:
-        reset -= timedelta(days=1)
+    reset = INDIA.token_reset()
     created = datetime.fromisoformat(d.get("created", "1970-01-01T00:00:00+05:30"))
     return d.get("access_token") if created >= reset else None
 
@@ -168,15 +165,7 @@ class KiteProvider(DataProvider):
             columns=["last", "prev_close", "volume", "avg_volume"])
 
     def movers(self, limit: int = 50) -> list[str]:
-        q = self.quotes(self.all_symbols())
-        if q.empty:
-            return []
-        q = q[q["prev_close"] > 0]
-        q["chg"] = q["last"] / q["prev_close"] - 1
-        q["rv"] = q["volume"] / q["avg_volume"].where(q["avg_volume"] > 0)
-        top = list(q.sort_values("chg", ascending=False).index[:limit])
-        active = [s for s in q.sort_values("rv", ascending=False).index[:limit // 2] if s not in top]
-        return (top + active)[:limit]
+        return rank_movers(self.quotes(self.all_symbols()), limit)
 
     def _fetch_intraday(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         frames, cur = [], start
@@ -190,27 +179,8 @@ class KiteProvider(DataProvider):
         return pd.concat(frames).sort_index() if frames else empty_bars(INDIA.tz)
 
     def daily(self, symbol: str, days: int = 60) -> pd.DataFrame:
-        """Daily bars, cached per symbol for the day (history is rate limited)."""
-        today = INDIA.now().date()
-        path = CACHE_DIR / self.name / "daily" / f"{symbol}_{today}.pkl"
-        if path.exists():
-            d = pd.read_pickle(path)
-            if len(d) >= days or len(d) >= 250:
-                return d.tail(days)
-        now = INDIA.now().replace(tzinfo=None)
-        rows = self._hist(symbol, now - timedelta(days=int(max(days, 60) * 1.6) + 5), now, "day")
-        d = self._frame(rows, daily=True)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        d.to_pickle(path)
-        return d.tail(days)
+        def fetch(n: int) -> pd.DataFrame:
+            now = INDIA.now().replace(tzinfo=None)
+            return self._frame(self._hist(symbol, now - timedelta(days=int(n * 1.6) + 5), now, "day"), daily=True)
 
-    def daily_many(self, symbols: list[str], days: int = 60) -> dict[str, pd.DataFrame]:
-        out = {}
-        for s in symbols:
-            try:
-                d = self.daily(s, days)
-            except Exception:
-                continue
-            if len(d):
-                out[s] = d
-        return out
+        return self._cached_daily(symbol, days, fetch)

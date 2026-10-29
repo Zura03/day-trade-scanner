@@ -17,12 +17,12 @@ from __future__ import annotations
 import json
 import os
 import time as _time
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
 from ..markets import INDIA, india_fo_symbols
-from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars
+from .base import BAR_COLS, DataProvider, empty_bars, rank_movers
 
 TOKEN_PATH = INDIA.path("groww_token.json")
 RETRY_AFTER = 300          # seconds between token attempts while approval is pending
@@ -39,12 +39,6 @@ def groww_credentials() -> dict | None:
     if tkey and tsecret:
         return {"mode": "totp", "api_key": tkey, "totp_secret": tsecret}
     return None
-
-
-def _last_reset() -> datetime:
-    now = INDIA.now()
-    reset = datetime.combine(now.date(), time(6, 0), INDIA.tz)
-    return reset if now >= reset else reset - timedelta(days=1)
 
 
 def _read_cache() -> dict:
@@ -65,7 +59,7 @@ def cached_token() -> str | None:
     """Today's token if we already have one (no network call)."""
     d = _read_cache()
     created = datetime.fromisoformat(d["created"]) if d.get("created") else None
-    return d.get("access_token") if created and created >= _last_reset() else None
+    return d.get("access_token") if created and created >= INDIA.token_reset() else None
 
 
 def groww_token(force: bool = False) -> str | None:
@@ -162,51 +156,70 @@ class GrowwProvider(DataProvider):
         return df[~df.index.duplicated(keep="last")].sort_index()
 
     def _quote(self, symbol: str) -> dict | None:
+        """Full quote (volume, day change). Unknown symbols return None;
+        auth/rate-limit/outage errors propagate so a broken feed is visible."""
+        from growwapi.groww.exceptions import (GrowwAPIBadRequestException, GrowwAPINotFoundException,
+                                               InstrumentNotFoundException)
+
         hit = self._quotes.get(symbol)
         if hit and hit[0] > _time.time() - QUOTE_TTL:
             return hit[1]
         try:
             q = self._call("live", self.g.get_quote, trading_symbol=symbol,
                            exchange=self.g.EXCHANGE_NSE, segment=self.g.SEGMENT_CASH)
-        except Exception:
+        except (GrowwAPINotFoundException, GrowwAPIBadRequestException, InstrumentNotFoundException):
             return None
         self._quotes[symbol] = (_time.time(), q or {})
         return q
+
+    def _ltp(self, symbols: list[str]) -> dict[str, float]:
+        """Last prices, 50 symbols per request."""
+        out: dict[str, float] = {}
+        for i in range(0, len(symbols), 50):
+            chunk = tuple(f"NSE_{s}" for s in symbols[i:i + 50])
+            r = self._call("live", self.g.get_ltp, exchange_trading_symbols=chunk,
+                           segment=self.g.SEGMENT_CASH) or {}
+            for key, v in r.items():
+                px = v.get("ltp") if isinstance(v, dict) else v
+                if px:
+                    out[key.split("_", 1)[1]] = float(px)
+        return out
 
     # ---- DataProvider -------------------------------------------------------
     def all_symbols(self) -> list[str]:
         return india_fo_symbols()
 
-    def quotes(self, symbols: list[str]) -> pd.DataFrame:
+    def quotes(self, symbols: list[str], full_quotes: int = 60) -> pd.DataFrame:
+        """Prices for everything via batched LTP (5 calls for ~220 stocks);
+        full quotes (needed for today's volume) only for the `full_quotes`
+        biggest movers - one call each, 10/second."""
+        if not symbols:
+            return pd.DataFrame(columns=["last", "prev_close", "volume", "avg_volume"])
         today = INDIA.now().date()
-        rows = []
-        for s in symbols:
-            q = self._quote(s)
-            if not q or not q.get("last_price"):
+        last = self._ltp(symbols)
+        if not last:
+            raise RuntimeError("Groww returned no prices (token expired or API down)")
+        base = {}
+        for s, px in last.items():
+            prior = self.daily(s, 15)
+            prior = prior[prior.index.date < today]
+            if not len(prior):
                 continue
-            last = float(q["last_price"])
-            chg = q.get("day_change")
-            prev = last - float(chg) if chg is not None else float((q.get("ohlc") or {}).get("close") or 0)
-            d = self.daily(s, 15)
-            prior = d[d.index.date < today]
-            rows.append({
-                "symbol": s, "last": last, "prev_close": prev,
-                "volume": float(q.get("volume") or 0),
-                "avg_volume": float(prior["volume"].tail(10).mean()) if len(prior) else 0.0,
-            })
-        return pd.DataFrame(rows).set_index("symbol") if rows else pd.DataFrame(
-            columns=["last", "prev_close", "volume", "avg_volume"])
+            base[s] = (px, float(prior["close"].iloc[-1]), float(prior["volume"].tail(10).mean()))
+        ranked = sorted(base, key=lambda s: base[s][0] / base[s][1], reverse=True)
+        rows = []
+        for n, s in enumerate(ranked):
+            px, prev, avg = base[s]
+            vol = 0.0
+            if n < full_quotes and (q := self._quote(s)):
+                vol = float(q.get("volume") or 0)
+                if q.get("day_change") is not None and q.get("last_price"):
+                    px, prev = float(q["last_price"]), float(q["last_price"]) - float(q["day_change"])
+            rows.append({"symbol": s, "last": px, "prev_close": prev, "volume": vol, "avg_volume": avg})
+        return pd.DataFrame(rows).set_index("symbol")
 
     def movers(self, limit: int = 50) -> list[str]:
-        q = self.quotes(self.all_symbols())
-        if q.empty:
-            return []
-        q = q[q["prev_close"] > 0]
-        q["chg"] = q["last"] / q["prev_close"] - 1
-        q["rv"] = q["volume"] / q["avg_volume"].where(q["avg_volume"] > 0)
-        top = list(q.sort_values("chg", ascending=False).index[:limit])
-        active = [s for s in q.sort_values("rv", ascending=False).index[:limit // 2] if s not in top]
-        return (top + active)[:limit]
+        return rank_movers(self.quotes(self.all_symbols()), limit)
 
     def _fetch_intraday(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         frames, cur = [], start
@@ -220,29 +233,13 @@ class GrowwProvider(DataProvider):
         return pd.concat(frames).sort_index() if frames else empty_bars(INDIA.tz)
 
     def daily(self, symbol: str, days: int = 60) -> pd.DataFrame:
-        """Daily bars, cached per symbol for the day."""
-        today = INDIA.now().date()
-        path = CACHE_DIR / self.name / "daily" / f"{symbol}_{today}.pkl"
-        if path.exists():
-            d = pd.read_pickle(path)
-            if len(d) >= days or len(d) >= 110:
-                return d.tail(days)
-        now = INDIA.now().replace(tzinfo=None)
-        span = min(int(max(days, 60) * 1.6) + 5, 179)  # max 180 days per request
-        try:
-            c = self._candles(symbol, now - timedelta(days=span), now, self.g.CANDLE_INTERVAL_DAY)
-        except Exception:
-            c = []
-        d = self._frame(c, daily=True)
-        if len(d):  # don't cache a failed fetch for the whole day
-            path.parent.mkdir(parents=True, exist_ok=True)
-            d.to_pickle(path)
-        return d.tail(days)
+        def fetch(n: int) -> pd.DataFrame:
+            now = INDIA.now().replace(tzinfo=None)
+            span = min(int(n * 1.6) + 5, 179)  # max 180 days per request
+            try:
+                return self._frame(self._candles(symbol, now - timedelta(days=span), now,
+                                                 self.g.CANDLE_INTERVAL_DAY), daily=True)
+            except Exception:
+                return self._frame([], daily=True)
 
-    def daily_many(self, symbols: list[str], days: int = 60) -> dict[str, pd.DataFrame]:
-        out = {}
-        for s in symbols:
-            d = self.daily(s, days)
-            if len(d):
-                out[s] = d
-        return out
+        return self._cached_daily(symbol, days, fetch)

@@ -21,26 +21,66 @@ from dtrader.strategies import REGISTRY, all_strategies, get_strategy  # noqa: E
 st.set_page_config(page_title="Day Trade Scanner", page_icon="📈", layout="wide")
 
 
-def require_password() -> None:
-    """Simple gate for phone/LAN access: set DASHBOARD_PASSWORD in .env.
-    After logging in, the URL carries a token so a bookmark stays signed in."""
+def _dash_secret() -> bytes:
+    """Random per-install secret for sign-in tokens. Delete data/dashboard_secret
+    to sign out every device."""
+    import secrets
+
+    from dtrader.config import DATA_DIR
+
+    p = DATA_DIR / "dashboard_secret"
+    if not p.exists():
+        p.write_text(secrets.token_hex(32))
+        p.chmod(0o600)
+    return p.read_text().strip().encode()
+
+
+TOKEN_DAYS = 30
+
+
+def _token(pw: str, day: str) -> str:
     import hashlib
     import hmac
+
+    return f"{day}." + hmac.new(_dash_secret(), f"{pw}|{day}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _token_ok(pw: str, k: str) -> bool:
+    import hmac
+    from datetime import date, datetime
+
+    day = k.split(".", 1)[0]
+    try:
+        issued = datetime.strptime(day, "%Y%m%d").date()
+    except ValueError:
+        return False
+    if (date.today() - issued).days > TOKEN_DAYS:
+        return False
+    return hmac.compare_digest(k.encode(), _token(pw, day).encode())
+
+
+def require_password() -> None:
+    """Simple gate for phone access: set DASHBOARD_PASSWORD in .env. After
+    logging in, the URL carries a token (valid 30 days) so a bookmark stays
+    signed in. Plain HTTP on Wi-Fi: prefer the Tailscale address, which is
+    encrypted."""
+    import hmac
     import os
+    from datetime import date
 
     pw = os.environ.get("DASHBOARD_PASSWORD")
     if not pw:
         return
-    token = hmac.new(pw.encode(), b"daytrader-dashboard", hashlib.sha256).hexdigest()[:24]
-    if st.session_state.get("authed") or hmac.compare_digest(st.query_params.get("k", ""), token):
+    if st.session_state.get("authed") or _token_ok(pw, st.query_params.get("k", "")):
         st.session_state.authed = True
-        st.query_params["k"] = token
+        if not _token_ok(pw, st.query_params.get("k", "")):
+            st.query_params["k"] = _token(pw, date.today().strftime("%Y%m%d"))
         return
     st.title("📈 Day Trade Scanner")
     entered = st.text_input("Password", type="password")
-    if entered and hmac.compare_digest(entered, pw):
+    if entered and hmac.compare_digest(entered.encode(), pw.encode()):
         st.session_state.authed = True
-        st.query_params["k"] = token
+        st.query_params["k"] = _token(pw, date.today().strftime("%Y%m%d"))
         st.rerun()
     elif entered:
         st.error("Wrong password")
@@ -50,10 +90,20 @@ def require_password() -> None:
 require_password()
 
 
-@st.cache_resource(show_spinner="Connecting to data source...", ttl=600)
 def provider_for(market_key: str, source: str, broker_token: str | None):
-    # broker_token is part of the cache key so a fresh Groww/Zerodha login is picked up
-    return get_provider(load_config(market_key), source)
+    """One provider per browser session (providers keep caches and rate-limit
+    timers that aren't thread-safe). Rebuilt after 10 minutes or when a new
+    Groww/Zerodha login appears."""
+    import time
+
+    key = (market_key, source, broker_token)
+    hit = st.session_state.get("_provider")
+    if hit and hit[0] == key and hit[1] > time.time() - 600:
+        return hit[2]
+    with st.spinner("Connecting to data source..."):
+        p = get_provider(load_config(market_key), source)
+    st.session_state["_provider"] = (key, time.time(), p)
+    return p
 
 
 SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "groww", "kite", "yfinance"]}
@@ -83,10 +133,17 @@ with st.sidebar:
         st.warning(f"Not logged in to your broker today - using free Yahoo data. {india_login_hint()}")
 
     names = list(REGISTRY)
-    active = st.selectbox("Active strategy", names, index=names.index(cfg["active_strategy"]),
-                          format_func=lambda n: REGISTRY[n].title)
+    # Per-market widget so a choice never carries over to the other market; and
+    # resync when the CLI/monitor/hint changed it, so stale widget state can't
+    # write an old choice back.
+    skey, seen = f"strategy_{mkey}", f"strategy_seen_{mkey}"
+    if st.session_state.get(seen) != cfg["active_strategy"]:
+        st.session_state[skey] = cfg["active_strategy"]
+        st.session_state[seen] = cfg["active_strategy"]
+    active = st.selectbox("Active strategy", names, key=skey, format_func=lambda n: REGISTRY[n].title)
     if active != cfg["active_strategy"]:
         set_active_strategy(active, mk)
+        st.session_state[seen] = active
         cfg = load_config(mk)
         st.toast(f"Switched to {REGISTRY[active].title}")
     st.caption(REGISTRY[active].description)

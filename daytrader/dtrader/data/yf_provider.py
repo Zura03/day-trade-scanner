@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import warnings
 from datetime import date, timedelta
 
@@ -9,7 +10,7 @@ import pandas as pd
 import yfinance as yf
 
 from ..markets import INDIA, india_fo_symbols
-from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, to_tz_index
+from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, rank_movers, read_cache, to_tz_index
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore", module="yfinance")
@@ -18,14 +19,18 @@ warnings.filterwarnings("ignore", message=".*inplace.*")
 
 class YFinanceProvider(DataProvider):
     name = "yfinance"
+    premarket_volume_known = False  # Yahoo reports 0 volume on premarket bars
     suffix = ""          # Yahoo ticker suffix (".NS" for NSE)
     prepost = True       # request extended-hours bars
 
     def _y(self, symbol: str) -> str:
         return symbol + self.suffix
 
+    SCREEN_TTL = 120  # seconds a screener quote is trusted
+
     def __init__(self):
-        self._screen_quotes: dict[str, dict] = {}
+        self._screen_quotes: dict[str, tuple[float, dict]] = {}
+        self._batch_cache: dict[tuple, tuple[float, dict]] = {}
 
     def movers(self, limit: int = 50) -> list[str]:
         syms: list[str] = []
@@ -36,7 +41,7 @@ class YFinanceProvider(DataProvider):
                 continue
             for r in res.get("quotes", []):
                 syms.append(r["symbol"])
-                self._screen_quotes[r["symbol"]] = r
+                self._screen_quotes[r["symbol"]] = (time.time(), r)
         seen, out = set(), []
         for s in syms:
             if s not in seen and "." not in s and "^" not in s:
@@ -47,8 +52,8 @@ class YFinanceProvider(DataProvider):
     def quotes(self, symbols: list[str]) -> pd.DataFrame:
         rows = []
         for s in symbols:
-            r = self._screen_quotes.get(s)
-            if r and r.get("regularMarketPrice"):
+            ts, r = self._screen_quotes.get(s, (0.0, None))
+            if r and r.get("regularMarketPrice") and ts > time.time() - self.SCREEN_TTL:
                 pre = r.get("marketState") == "PRE" and r.get("preMarketPrice")
                 last = pre or r["regularMarketPrice"]
                 rows.append({
@@ -121,6 +126,12 @@ class YFinanceIndiaProvider(YFinanceProvider):
         return india_fo_symbols()
 
     def _daily_batch(self, symbols: list[str], days: int) -> dict[str, pd.DataFrame]:
+        """Batch daily download; reused for 60 s so movers() and the scan's
+        quotes() in the same pass share one download."""
+        key = (days,)
+        ts, cached = self._batch_cache.get(key, (0.0, {}))
+        if ts > time.time() - 60 and all(s in cached for s in symbols):
+            return {s: cached[s] for s in symbols}
         out: dict[str, pd.DataFrame] = {}
         for i in range(0, len(symbols), 100):
             chunk = symbols[i:i + 100]
@@ -140,12 +151,14 @@ class YFinanceIndiaProvider(YFinanceProvider):
                 d = d[BAR_COLS].dropna()
                 if len(d):
                     out[s] = d.tail(days)
+        merged = {**(cached if ts > time.time() - 60 else {}), **out}
+        self._batch_cache[key] = (time.time(), merged)
         return out
 
     def daily_many(self, symbols: list[str], days: int = 60) -> dict[str, pd.DataFrame]:
         path = CACHE_DIR / self.name / f"daily_many_{self.market.now().date()}_{days}_{len(symbols)}.pkl"
-        if path.exists():
-            return pd.read_pickle(path)
+        if (cached := read_cache(path)) is not None:
+            return cached
         out = self._daily_batch(symbols, days)
         path.parent.mkdir(parents=True, exist_ok=True)
         pd.to_pickle(out, path)
@@ -171,11 +184,4 @@ class YFinanceIndiaProvider(YFinanceProvider):
 
     def movers(self, limit: int = 50) -> list[str]:
         """No gainers screener for NSE: rank the F&O list by % change."""
-        q = self.quotes(self.all_symbols())
-        if q.empty:
-            return []
-        q["chg"] = q["last"] / q["prev_close"] - 1
-        q["rv"] = q["volume"] / q["avg_volume"].where(q["avg_volume"] > 0)
-        top = list(q.sort_values("chg", ascending=False).index[:limit])
-        active = [s for s in q.sort_values("rv", ascending=False).index[:limit // 2] if s not in top]
-        return (top + active)[:limit]
+        return rank_movers(self.quotes(self.all_symbols()), limit)

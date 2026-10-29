@@ -44,6 +44,7 @@ exits:
   breakeven_after_r: 1.0      # move stop to entry once +1R
   time_exit: "15:50"          # flatten anything still open
   no_new_entries_after: "11:30"   # small-cap momentum fades after morning
+  max_trades_per_day: 2       # per symbol, live monitor and backtest alike
 
 # --- Per-strategy parameters (override defaults in code) --------------
 strategies:
