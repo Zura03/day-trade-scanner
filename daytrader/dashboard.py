@@ -15,7 +15,7 @@ from dtrader.config import load_config, load_state, set_active_strategy  # noqa:
 from dtrader.markets import MARKETS  # noqa: E402
 from dtrader.data import get_provider  # noqa: E402
 from dtrader.performance import load_journal, strategy_hint  # noqa: E402
-from dtrader.scanner import scan  # noqa: E402
+from dtrader.scanner import buyable_now, scan  # noqa: E402
 from dtrader.strategies import REGISTRY, all_strategies, get_strategy  # noqa: E402
 
 st.set_page_config(page_title="Day Trade Scanner", page_icon="📈", layout="wide")
@@ -217,6 +217,54 @@ def style_status(v):
     return STATUS_COLORS.get(v, "")
 
 
+# ---------------- buyable now ---------------------------------------------
+def buyable_section(df: pd.DataFrame) -> None:
+    """Every setup that is buyable right now, across all strategies."""
+    recent = strategy_hint(load_last_trades(mk), cfg, names=names).table
+    b = buyable_now(df, strategy.name, recent)
+    st.subheader(f"✅ Buyable now - all strategies ({len(b)})")
+    if b.empty:
+        st.caption("Nothing is buyable right now: no setup has triggered and is still within "
+                   "0.5R of its entry with its trade open. "
+                   + ("The market is closed." if not mk.session_hours(mk.now().date()) or
+                      mk.now() >= mk.session_hours(mk.now().date())[1] else ""))
+        return
+    min_t = int(cfg.get("switch_hint", {}).get("min_trades", 5))
+
+    def lately(r):
+        if r.strategy_R != r.strategy_R or r.strategy_trades < min_t:
+            return f"too few trades ({r.strategy_trades})"
+        return f"{r.strategy_R:+.2f}R ({r.strategy_trades})"
+
+    show = pd.DataFrame({
+        "": ["⭐" if a else "" for a in b["active"]],
+        "symbol": b["symbol"],
+        "strategy": [REGISTRY[n].title for n in b["strategy"]],
+        "strategy lately": [lately(r) for r in b.itertuples()],
+        "triggered": b["triggered_at"],
+        "entry": b["entry"], "last": b["last"], "R past entry": b["r_from_entry"],
+        "stop": b["stop"], "target": b["target"], "shares": b["shares"],
+        "why": b["why"],
+    })
+
+    def tone(v):
+        if isinstance(v, str) and v.startswith("-"):
+            return "color:#ef5350"
+        if isinstance(v, str) and v.startswith("+"):
+            return "color:#26a69a"
+        return ""
+
+    money = st.column_config.NumberColumn(format="%.2f")
+    st.dataframe(show.style.map(tone, subset=["strategy lately"]), width="stretch", hide_index=True,
+                 column_config={"entry": money, "last": money, "stop": money, "target": money,
+                                "R past entry": st.column_config.NumberColumn(format="%+.2f"),
+                                "shares": st.column_config.NumberColumn(format="%d")})
+    st.caption(f"⭐ = your active strategy ({strategy.title}), the only one the monitor alerts on. "
+               "'Strategy lately' is that strategy's average R per trade over recent sessions "
+               "(trades in brackets) - red means it has been losing money. "
+               "Educational tool, not financial advice.")
+
+
 # ---------------- picks ---------------------------------------------------
 @st.fragment(run_every=60 if auto else None)
 def picks():
@@ -233,18 +281,8 @@ def picks():
         st.info("No stocks pass the universe filters right now (price / gap / relative volume / float).")
         return
     view = df if compare else df[df["strategy"] == strategy.name]
-    others = df[(df["status"] == "BUY NOW") & (df["strategy"] != strategy.name)]
-    if not compare and len(others):
-        tbl = strategy_hint(load_last_trades(mk), cfg, names=names).table
-
-        def lately(n):
-            r = tbl.loc[n] if n in tbl.index else None
-            return f"{r['expectancy_R']:+.2f}R/trade lately" if r is not None and r["expectancy_R"] == r["expectancy_R"] else "untested lately"
-
-        items = "; ".join(f"**{r.symbol}** ({REGISTRY[r.strategy].title}, {lately(r.strategy)})"
-                          for r in others.itertuples())
-        st.info(f"Buyable in other strategies (not {strategy.title}, so no alerts): {items}. "
-                "Tick *Compare all strategies* to see them.")
+    buyable_section(df)
+    st.subheader(f"{strategy.title} scan" if not compare else "All strategies")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Candidates", view["symbol"].nunique())
     c2.metric("BUY NOW", int((view["status"] == "BUY NOW").sum()))

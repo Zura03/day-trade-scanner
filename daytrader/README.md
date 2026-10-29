@@ -237,6 +237,15 @@ dashboard pick it up automatically.
 
 The monitor sends one BUY alert per setup, at the current price.
 
+The dashboard's **Buyable now - all strategies** section, at the top of the
+Picks tab, lists every BUY NOW setup across all six strategies. Each row shows:
+- the strategy's recent R per trade, in red if it has been losing money;
+- how far price is past the entry, in R;
+- the entry, stop, target and share size.
+
+Your active strategy is starred; it's the only one the monitor alerts on. From
+the terminal, run `./run.sh scan --buyable` (add `--market india` for NSE).
+
 ## How the switch hint works
 
 It looks at each strategy's expectancy (average R per trade) over the last

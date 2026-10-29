@@ -6,6 +6,7 @@ Add --market india before the command for the Indian market (default: us).
   python cli.py strategies              list strategies (* = active)
   python cli.py switch bull_flag        change the active strategy
   python cli.py scan [--all]            rank today's movers for the active (or every) strategy
+  python cli.py scan --buyable          only setups buyable right now, across all strategies
   python cli.py backtest --days 10      replay recent sessions for every strategy
   python cli.py hint                    should I switch strategies?
   python cli.py monitor                 live BUY / SELL alerts (runs until Ctrl-C)
@@ -59,10 +60,29 @@ def cmd_scan(cfg, args):
     from dtrader.scanner import scan
 
     p = provider(cfg, args)
-    strats = all_strategies(cfg) if args.all else [get_strategy(args.strategy or cfg["active_strategy"], cfg)]
+    every = args.all or args.buyable
+    strats = all_strategies(cfg) if every else [get_strategy(args.strategy or cfg["active_strategy"], cfg)]
     df, _ = scan(p, cfg, strats, log=lambda m: print(m, file=sys.stderr))
     if df.empty:
         print("No candidates passed the filters right now.")
+        return
+    if args.buyable:
+        from dtrader.backtest import load_last_trades
+        from dtrader.performance import strategy_hint
+        from dtrader.scanner import buyable_now
+
+        recent = strategy_hint(load_last_trades(cfg["market"]), cfg, names=list(REGISTRY)).table
+        b = buyable_now(df, cfg["active_strategy"], recent)
+        if b.empty:
+            print("Nothing is buyable right now.")
+            return
+        b.insert(0, "*", ["*" if a else "" for a in b["active"]])
+        b["strategy_R"] = b["strategy_R"].map(lambda v: "" if v != v else f"{v:+.2f}")
+        cols = ["*", "symbol", "strategy", "strategy_R", "strategy_trades", "triggered_at", "entry", "last",
+                "r_from_entry", "stop", "target", "shares", "why"]
+        print(b[cols].to_string(index=False))
+        print(f"\n* = active strategy ({cfg['active_strategy']}), the only one the monitor alerts on. "
+              f"strategy_R = its recent average R per trade.\n{DISCLAIMER}")
         return
     if args.all:
         piv = df.pivot_table(index="symbol", columns="strategy", values="status", aggfunc="first")
@@ -182,6 +202,7 @@ def main():
     s = sub.add_parser("switch"); s.add_argument("name")
     s = sub.add_parser("scan")
     s.add_argument("--strategy"); s.add_argument("--all", action="store_true", help="show every strategy")
+    s.add_argument("--buyable", action="store_true", help="only setups buyable now, across all strategies")
     s.add_argument("--top", type=int, default=20)
     s = sub.add_parser("backtest")
     s.add_argument("--days", type=int, default=10); s.add_argument("--strategy", default="all")

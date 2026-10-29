@@ -208,6 +208,8 @@ def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: dat
                 "stop": sig.stop if sig else None,
                 "target": sig.target if sig else None,
                 "shares": st.position_size(sig) if sig else None,
+                "triggered_at": f"{sig.time:%H:%M}" if sig else None,
+                "r_from_entry": round((c.last - sig.entry) / sig.risk, 2) if sig and sig.risk > 0 else None,
                 "why": (f"[{a['outcome']}] " if a.get("outcome") else "") + sig.reason if sig
                        else (f"watch {a['watch'][1]}" if a["watch"] else ""),
                 "source": c.source,
@@ -216,3 +218,23 @@ def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: dat
     if len(df):
         df = df.sort_values(["score"], ascending=False).reset_index(drop=True)
     return df, cands
+
+
+def buyable_now(df: pd.DataFrame, active: str, recent: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Every BUY NOW setup across all strategies, best first: your active
+    strategy, then strategies with the best recent R per trade, then the
+    least extended (closest to entry). `recent` is the switch-hint table."""
+    if df.empty:
+        return df
+    b = df[df["status"] == "BUY NOW"].copy()
+    if b.empty:
+        return b
+    b["active"] = b["strategy"] == active
+    if recent is not None and len(recent):
+        b["strategy_R"] = b["strategy"].map(recent["expectancy_R"])
+        b["strategy_trades"] = b["strategy"].map(recent["trades"]).fillna(0).astype(int)
+    else:
+        b["strategy_R"], b["strategy_trades"] = np.nan, 0
+    b = b.sort_values(["active", "strategy_R", "r_from_entry"], ascending=[False, False, True],
+                      na_position="last")
+    return b.reset_index(drop=True)
