@@ -92,6 +92,31 @@ If the Mac is asleep at the start time, it runs as soon as the Mac wakes.
 Closing the lid on battery still puts the Mac to sleep. The log is in
 `data/monitor.log`.
 
+### Open the dashboard from your phone
+
+`autostart.sh install` also keeps the dashboard running in the background. It
+starts at login and restarts if it crashes.
+
+The dashboard is reachable from other devices only when `DASHBOARD_PASSWORD`
+is set in `.env`. Without it, the dashboard binds to localhost only. After you
+log in, the URL carries a sign-in token, so you can bookmark it. Anyone with
+that bookmarked URL can get in, so don't share it.
+
+**Same Wi-Fi:** run `./scripts/autostart.sh status`, then open the
+"Phone on same Wi-Fi" address it prints, for example
+`http://192.168.0.3:8501`. Your router can change that address, so check
+`status` again if it stops working.
+
+**From anywhere, with Tailscale (free, private, nothing exposed to the
+internet):**
+1. Install Tailscale on the Mac from <https://tailscale.com/download> and sign in.
+2. Install the Tailscale app on your phone and sign in with the same account.
+3. Restart the dashboard so it picks up Tailscale:
+   `launchctl kickstart -k gui/$(id -u)/com.daytrader.dashboard`
+4. `./scripts/autostart.sh status` now also prints a "Phone anywhere
+   (Tailscale)" address, such as `http://your-mac.tailnet-name.ts.net:8501`.
+   That address works whenever Tailscale is on, on both devices.
+
 ### Phone alerts (ntfy)
 
 1. Install the free **ntfy** app (iOS or Android).

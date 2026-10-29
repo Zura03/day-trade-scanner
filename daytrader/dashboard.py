@@ -20,6 +20,35 @@ from dtrader.strategies import REGISTRY, all_strategies, get_strategy  # noqa: E
 st.set_page_config(page_title="Day Trade Scanner", page_icon="📈", layout="wide")
 
 
+def require_password() -> None:
+    """Simple gate for phone/LAN access: set DASHBOARD_PASSWORD in .env.
+    After logging in, the URL carries a token so a bookmark stays signed in."""
+    import hashlib
+    import hmac
+    import os
+
+    pw = os.environ.get("DASHBOARD_PASSWORD")
+    if not pw:
+        return
+    token = hmac.new(pw.encode(), b"daytrader-dashboard", hashlib.sha256).hexdigest()[:24]
+    if st.session_state.get("authed") or hmac.compare_digest(st.query_params.get("k", ""), token):
+        st.session_state.authed = True
+        st.query_params["k"] = token
+        return
+    st.title("📈 Day Trade Scanner")
+    entered = st.text_input("Password", type="password")
+    if entered and hmac.compare_digest(entered, pw):
+        st.session_state.authed = True
+        st.query_params["k"] = token
+        st.rerun()
+    elif entered:
+        st.error("Wrong password")
+    st.stop()
+
+
+require_password()
+
+
 @st.cache_resource(show_spinner="Connecting to data source...")
 def provider_for(source: str):
     return get_provider(load_config(), source)
