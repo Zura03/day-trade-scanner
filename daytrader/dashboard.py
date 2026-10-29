@@ -111,6 +111,10 @@ SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "gr
 # ---------------- sidebar ------------------------------------------------
 with st.sidebar:
     st.title("📈 Day Trade Scanner")
+    if "market" not in st.session_state:  # open on whichever market is trading now
+        live = [k for k, m in MARKETS.items()
+                if (h := m.session_hours(m.now().date())) and m.now().time() >= m.day_start and m.now() < h[1]]
+        st.session_state["market"] = live[0] if live else "us"
     mkey = st.radio("Market", list(MARKETS), horizontal=True, key="market",
                     format_func=lambda k: f"{MARKETS[k].flag} {MARKETS[k].name}")
     cfg = load_config(mkey)
@@ -216,7 +220,7 @@ def style_status(v):
 # ---------------- picks ---------------------------------------------------
 @st.fragment(run_every=60 if auto else None)
 def picks():
-    strats = all_strategies(cfg) if compare else [strategy]
+    strats = all_strategies(cfg)  # always analyse all: cheap once bars are fetched
     key = f"scan_{mk.key}"
     if st.button("🔄 Scan now", type="primary") or key not in st.session_state or auto:
         with st.spinner("Scanning movers..."):
@@ -229,6 +233,18 @@ def picks():
         st.info("No stocks pass the universe filters right now (price / gap / relative volume / float).")
         return
     view = df if compare else df[df["strategy"] == strategy.name]
+    others = df[(df["status"] == "BUY NOW") & (df["strategy"] != strategy.name)]
+    if not compare and len(others):
+        tbl = strategy_hint(load_last_trades(mk), cfg, names=names).table
+
+        def lately(n):
+            r = tbl.loc[n] if n in tbl.index else None
+            return f"{r['expectancy_R']:+.2f}R/trade lately" if r is not None and r["expectancy_R"] == r["expectancy_R"] else "untested lately"
+
+        items = "; ".join(f"**{r.symbol}** ({REGISTRY[r.strategy].title}, {lately(r.strategy)})"
+                          for r in others.itertuples())
+        st.info(f"Buyable in other strategies (not {strategy.title}, so no alerts): {items}. "
+                "Tick *Compare all strategies* to see them.")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Candidates", view["symbol"].nunique())
     c2.metric("BUY NOW", int((view["status"] == "BUY NOW").sum()))

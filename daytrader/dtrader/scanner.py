@@ -80,6 +80,9 @@ def momentum_score(ctx: DayContext, rel_volume: float, last: float) -> float:
     return round(s, 2)
 
 
+NO_SETUP = "no setup"
+
+
 def buy_status(strategy: Strategy, s: Signal, bars: pd.DataFrame, last: float) -> tuple[str, str | None]:
     """BUY NOW while the setup is still buyable: the trade it started hasn't
     hit its stop/target/exit, price is above the stop and no more than
@@ -101,7 +104,7 @@ def buy_status(strategy: Strategy, s: Signal, bars: pd.DataFrame, last: float) -
 def analyse(strategy: Strategy, cand: Candidate) -> dict:
     df, ctx = cand.bars, cand.ctx
     sigs: list[Signal] = strategy.entries(df, ctx)
-    out = {"status": "-", "signal": None, "watch": None, "outcome": None, "qualifies": strategy.qualifies(ctx)}
+    out = {"status": NO_SETUP, "signal": None, "watch": None, "outcome": None, "qualifies": strategy.qualifies(ctx)}
     if len(df):
         if sigs:
             s = sigs[-1]
@@ -112,7 +115,7 @@ def analyse(strategy: Strategy, cand: Candidate) -> dict:
             if w and cand.last < w[0] and (w[0] - cand.last) / w[0] <= 0.05:
                 out["status"] = "SETTING UP" if not sigs else out["status"]
                 out["watch"] = w
-    if out["status"] == "-" and out["qualifies"]:
+    if out["status"] == NO_SETUP and out["qualifies"]:
         out["status"] = "qualifies"
     bonus = {"BUY NOW": 10, "SETTING UP": 6, "qualifies": 3}.get(out["status"], 2 if sigs else 0)
     out["score"] = momentum_score(ctx, cand.rel_volume, cand.last) + bonus
