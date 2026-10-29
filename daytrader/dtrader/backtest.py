@@ -14,13 +14,15 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .config import DATA_DIR
 from .data.base import DataProvider, trading_days_back
 from .indicators import add_indicators, build_context
+from .markets import US, Market, get_market
 from .scanner import history_symbols
 from .strategies import Position, Strategy
 
-TRADES_CSV = DATA_DIR / "backtest_trades.csv"
+
+def trades_csv(market: Market = US):
+    return market.path("backtest_trades.csv")
 
 
 def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.001,
@@ -105,7 +107,8 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
     else:
         min_avg_vol = 0.0
         if symbols is None:
-            symbols = sorted(set(history_symbols(days=days + 5)) | {s.upper() for s in u.get("watchlist") or []})
+            symbols = sorted(set(history_symbols(days=days + 5, market=provider.market))
+                             | {s.upper() for s in u.get("watchlist") or []})
             try:
                 symbols = sorted(set(symbols) | set(provider.movers(limit=60)))
             except Exception:
@@ -137,8 +140,8 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
             if not len(prior):
                 continue
             ctx = build_context(sym, dd, bars, float(prior["close"].iloc[-1]),
-                                float(prior["volume"].tail(10).mean()))
-            df = add_indicators(bars)
+                                float(prior["volume"].tail(10).mean()), market=provider.market)
+            df = add_indicators(bars, provider.market)
             if not df["regular"].any():
                 continue
             for st in strategies:
@@ -156,7 +159,7 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
     trades = pd.DataFrame(rows)
     if len(trades):
         trades = trades.sort_values(["day", "entry_time"]).reset_index(drop=True)
-        trades.to_csv(TRADES_CSV, index=False)
+        trades.to_csv(trades_csv(provider.market), index=False)
     return trades
 
 
@@ -179,15 +182,16 @@ def summarize(trades: pd.DataFrame, strategies: list[str] | None = None) -> pd.D
             "total_R": round(r.sum(), 2),
             "profit_factor": round(wins / losses, 2) if losses else np.inf,
             "max_dd_R": round((eq.cummax() - eq).max(), 2),
-            "pnl_$": round(t["pnl"].sum(), 2),
+            "pnl": round(t["pnl"].sum(), 2),
             "days_traded": t["day"].nunique(),
         })
     return pd.DataFrame(rows).set_index("strategy") if rows else pd.DataFrame()
 
 
-def load_last_trades() -> pd.DataFrame:
-    if TRADES_CSV.exists():
-        t = pd.read_csv(TRADES_CSV, parse_dates=["entry_time", "exit_time"])
+def load_last_trades(market: str | Market | None = None) -> pd.DataFrame:
+    path = trades_csv(get_market(market))
+    if path.exists():
+        t = pd.read_csv(path, parse_dates=["entry_time", "exit_time"])
         t["day"] = pd.to_datetime(t["day"]).dt.date
         return t
     return pd.DataFrame()

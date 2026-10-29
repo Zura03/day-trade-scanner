@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from ..config import DATA_DIR
+from ..markets import US, Market
 
 NY = ZoneInfo("America/New_York")
 CACHE_DIR = DATA_DIR / "cache"
@@ -22,12 +23,13 @@ def now_ny() -> datetime:
     return datetime.now(NY)
 
 
-def empty_bars() -> pd.DataFrame:
-    return pd.DataFrame(columns=BAR_COLS, index=pd.DatetimeIndex([], tz=NY))
+def empty_bars(tz: ZoneInfo = NY) -> pd.DataFrame:
+    return pd.DataFrame(columns=BAR_COLS, index=pd.DatetimeIndex([], tz=tz))
 
 
 class DataProvider(ABC):
     name = "base"
+    market: Market = US
 
     # ---- required -----------------------------------------------------
     @abstractmethod
@@ -40,7 +42,7 @@ class DataProvider(ABC):
 
     @abstractmethod
     def _fetch_intraday(self, symbol: str, start: date, end: date) -> pd.DataFrame:
-        """1-minute bars incl. pre/post market, tz=America/New_York."""
+        """1-minute bars (incl. pre/post market where it exists), in market tz."""
 
     @abstractmethod
     def daily(self, symbol: str, days: int = 60) -> pd.DataFrame:
@@ -48,8 +50,8 @@ class DataProvider(ABC):
 
     # ---- shared -------------------------------------------------------
     def intraday(self, symbol: str, day: date) -> pd.DataFrame:
-        """1-min bars for one session (04:00-20:00). Past days are cached."""
-        today = now_ny().date()
+        """1-min bars for one session. Past days are cached."""
+        today = self.market.now().date()
         path = CACHE_DIR / self.name / f"{symbol}_{day.isoformat()}.pkl"
         if day < today and path.exists():
             return pd.read_pickle(path)
@@ -64,7 +66,7 @@ class DataProvider(ABC):
         """Bars for several sessions, fetching uncached days in one request."""
         out: dict[date, pd.DataFrame] = {}
         missing = []
-        today = now_ny().date()
+        today = self.market.now().date()
         for d in days:
             p = CACHE_DIR / self.name / f"{symbol}_{d.isoformat()}.pkl"
             if d < today and p.exists():
@@ -74,7 +76,7 @@ class DataProvider(ABC):
         if missing:
             df = self._fetch_intraday(symbol, min(missing), max(missing))
             for d in missing:
-                part = df[df.index.date == d] if len(df) else empty_bars()
+                part = df[df.index.date == d] if len(df) else empty_bars(self.market.tz)
                 out[d] = part
                 if d < today and len(part):
                     p = CACHE_DIR / self.name / f"{symbol}_{d.isoformat()}.pkl"
@@ -83,15 +85,12 @@ class DataProvider(ABC):
         return out
 
     def session_hours(self, day: date) -> tuple[datetime, datetime] | None:
-        """Regular-session open/close for `day` in ET, or None if closed.
-        Default knows weekends only; Alpaca also knows holidays/half days."""
-        if day.weekday() >= 5:
-            return None
-        return (datetime.combine(day, datetime.min.time().replace(hour=9, minute=30), NY),
-                datetime.combine(day, datetime.min.time().replace(hour=16), NY))
+        """Regular-session open/close for `day` (market tz), None if closed.
+        Uses the exchange calendar (holidays, half days)."""
+        return self.market.session_hours(day)
 
     def all_symbols(self) -> list[str] | None:
-        """Every tradable US-listed stock, if the source can list them (for
+        """Every tradable stock in the market's universe, if the source can list them (for
         market-wide backtests). None means "not supported"."""
         return None
 
@@ -112,7 +111,10 @@ class DataProvider(ABC):
 
     def float_shares(self, symbols: list[str]) -> dict[str, float | None]:
         """Float in shares. Neither Schwab nor price data gives float, so we
-        look it up via Yahoo once a week and cache it."""
+        look it up via Yahoo once a week and cache it. US small caps only:
+        the India universe (F&O stocks) is all large and liquid."""
+        if self.market is not US:
+            return {s: None for s in symbols}
         cache = {}
         if FLOAT_CACHE.exists():
             try:
@@ -142,16 +144,14 @@ class DataProvider(ABC):
         return out
 
 
-def trading_days_back(n: int, provider: DataProvider, ref: str = "SPY") -> list[date]:
-    """Last n completed-or-current trading sessions, using SPY's daily bars."""
-    d = provider.daily(ref, days=n * 2 + 10)
-    days = [x.date() if hasattr(x, "date") else x for x in d.index]
-    return days[-n:]
+def trading_days_back(n: int, provider: DataProvider) -> list[date]:
+    """Last n completed-or-current trading sessions (exchange calendar)."""
+    return provider.market.sessions_back(n)
 
 
-def to_ny_index(df: pd.DataFrame) -> pd.DataFrame:
+def to_tz_index(df: pd.DataFrame, tz: ZoneInfo = NY) -> pd.DataFrame:
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC")
-    df.index = df.index.tz_convert(NY)
+    df.index = df.index.tz_convert(tz)
     return df
 

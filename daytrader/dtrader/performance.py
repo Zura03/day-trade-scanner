@@ -11,15 +11,18 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .config import DATA_DIR
-
-JOURNAL = DATA_DIR / "journal.jsonl"
+from .markets import US, Market, get_market
 
 
-def load_journal() -> pd.DataFrame:
-    if not JOURNAL.exists():
+def journal_path(market: Market = US):
+    return market.path("journal.jsonl")
+
+
+def load_journal(market: str | Market | None = None) -> pd.DataFrame:
+    path = journal_path(get_market(market))
+    if not path.exists():
         return pd.DataFrame()
-    rows = [json.loads(l) for l in JOURNAL.read_text().splitlines() if l.strip()]
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
     if not rows:
         return pd.DataFrame()
     j = pd.DataFrame(rows)
@@ -50,7 +53,7 @@ def strategy_hint(backtest_trades: pd.DataFrame, cfg: dict, active: str | None =
     bt = backtest_trades.copy()
     if len(bt):
         bt["source"] = "backtest"
-    live = load_journal()
+    live = load_journal(cfg.get("market"))
     frames = [f[["day", "strategy", "r", "source"]] for f in (bt, live) if len(f)]
     allt = pd.concat(frames) if frames else pd.DataFrame(columns=["day", "strategy", "r", "source"])
     if len(allt):

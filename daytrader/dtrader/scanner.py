@@ -1,20 +1,18 @@
-"""Find today's small-cap movers and rank them for a strategy."""
+"""Find today's movers and rank them for a strategy (US small caps / NSE F&O)."""
 from __future__ import annotations
 
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import date, time, timedelta
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
 
-from .config import DATA_DIR
-from .data.base import DataProvider, now_ny
+from .data.base import DataProvider
 from .indicators import DayContext, add_indicators, build_context
+from .markets import US, Market
 from .strategies import Signal, Strategy
-
-HISTORY = DATA_DIR / "candidate_history.json"
 
 
 @dataclass
@@ -29,33 +27,36 @@ class Candidate:
 
 
 def session_day(provider: DataProvider) -> date:
-    """Today if a session is underway (from 4:00 ET premarket), else the last one."""
-    now = now_ny()
-    if now.weekday() < 5 and now.time() >= time(4, 0):
-        return now.date()
-    spy = provider.daily("SPY", days=10)
-    days = [d.date() for d in spy.index if d.date() < now.date()]
-    return days[-1] if days else now.date() - timedelta(days=1)
+    """Today once its session has started (premarket for the US, the open for
+    India) and the exchange is open, else the last session."""
+    m = provider.market
+    days = m.sessions_back(1)
+    return days[-1] if days else m.now().date() - timedelta(days=1)
 
 
-def _load_history() -> dict:
-    if HISTORY.exists():
+def _history_path(market: Market):
+    return market.path("candidate_history.json")
+
+
+def _load_history(market: Market = US) -> dict:
+    p = _history_path(market)
+    if p.exists():
         try:
-            return json.loads(HISTORY.read_text())
+            return json.loads(p.read_text())
         except json.JSONDecodeError:
             pass
     return {}
 
 
-def record_history(day: date, symbols: list[str]) -> None:
-    h = _load_history()
+def record_history(day: date, symbols: list[str], market: Market = US) -> None:
+    h = _load_history(market)
     h[day.isoformat()] = sorted(set(h.get(day.isoformat(), [])) | set(symbols))
     keep = sorted(h)[-90:]
-    HISTORY.write_text(json.dumps({k: h[k] for k in keep}, indent=1))
+    _history_path(market).write_text(json.dumps({k: h[k] for k in keep}, indent=1))
 
 
-def history_symbols(before: date | None = None, days: int = 30) -> list[str]:
-    h = _load_history()
+def history_symbols(before: date | None = None, days: int = 30, market: Market = US) -> list[str]:
+    h = _load_history(market)
     keys = sorted(k for k in h if before is None or k < before.isoformat())[-days:]
     return sorted({s for k in keys for s in h[k]})
 
@@ -105,8 +106,9 @@ def analyse(strategy: Strategy, cand: Candidate) -> dict:
 def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None,
                       log=print) -> list[Candidate]:
     u = cfg.get("universe", {})
+    m: Market = provider.market
     day = day or session_day(provider)
-    is_today = day == now_ny().date()
+    is_today = day == m.now().date()
 
     sources: dict[str, str] = {}
     if is_today:
@@ -114,10 +116,10 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
             sources.setdefault(s, "movers")
     for s in u.get("watchlist") or []:
         sources.setdefault(s.upper(), "watchlist")
-    for s in history_symbols(before=day, days=3):
+    for s in history_symbols(before=day, days=3, market=m):
         sources.setdefault(s, "history")
     if not is_today and not any(v == "movers" for v in sources.values()):
-        for s in history_symbols(days=1) or provider.movers(limit=80):
+        for s in history_symbols(days=1, market=m) or provider.movers(limit=80):
             sources.setdefault(s, "movers")
     log(f"Universe: {len(sources)} symbols for session {day}")
 
@@ -132,7 +134,7 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
         if not (u.get("min_price", 1) <= r["last"] <= u.get("max_price", 20)):
             continue
         # Before the open the day's volume is ~0, so relative volume can't filter yet.
-        premarket = now_ny().time() < time(9, 30)
+        premarket = m.now().time() < m.open
         weak_vol = rv < u.get("min_rel_volume", 2) and not premarket
         if sources[sym] == "movers" and is_today and (chg < u.get("min_gap_pct", 5) or weak_vol):
             continue
@@ -155,11 +157,11 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
             continue
         if not len(bars) or np.isnan(prev_close):
             continue
-        ctx = build_context(sym, day, bars, prev_close, avg_vol, fl)
+        ctx = build_context(sym, day, bars, prev_close, avg_vol, fl, market=m)
         last = float(bars["close"].iloc[-1])
         rel = float(bars["volume"].sum() / avg_vol) if avg_vol else rv
-        out.append(Candidate(sym, ctx, add_indicators(bars), last, rel, sources[sym]))
-    record_history(day, [c.symbol for c in out if c.source == "movers"])
+        out.append(Candidate(sym, ctx, add_indicators(bars, m), last, rel, sources[sym]))
+    record_history(day, [c.symbol for c in out if c.source == "movers"], m)
     return out
 
 

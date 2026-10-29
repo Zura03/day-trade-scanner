@@ -1,5 +1,7 @@
 #!/usr/bin/env python
-"""Small-cap day-trade scanner.
+"""Day-trade scanner for US small caps and NSE F&O stocks.
+
+Add --market india before the command for the Indian market (default: us).
 
   python cli.py strategies              list strategies (* = active)
   python cli.py switch bull_flag        change the active strategy
@@ -7,7 +9,9 @@
   python cli.py backtest --days 10      replay recent sessions for every strategy
   python cli.py hint                    should I switch strategies?
   python cli.py monitor                 live BUY / SELL alerts (runs until Ctrl-C)
-  python cli.py auth                    log in to Schwab (first-time setup)
+  python cli.py auth                    log in to Schwab (US) / Zerodha (India, daily)
+
+  python cli.py --market india scan     same commands for NSE
 """
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ pd.set_option("display.width", 200)
 pd.set_option("display.max_columns", 30)
 pd.set_option("display.max_colwidth", 60)
 
-DISCLAIMER = ("Educational tool, not financial advice. Small caps are volatile: "
+DISCLAIMER = ("Educational tool, not financial advice. Day trading is risky: "
               "always use a stop and size for the loss.")
 
 
@@ -34,7 +38,7 @@ def provider(cfg, args):
     from dtrader.data import get_provider
 
     p = get_provider(cfg, getattr(args, "source", None))
-    print(f"[data: {p.name}]", file=sys.stderr)
+    print(f"[{cfg['market'].name} market, data: {p.name}]", file=sys.stderr)
     return p
 
 
@@ -47,8 +51,8 @@ def cmd_strategies(cfg, args):
 def cmd_switch(cfg, args):
     if args.name not in REGISTRY:
         sys.exit(f"Unknown strategy. Options: {', '.join(REGISTRY)}")
-    set_active_strategy(args.name)
-    print(f"Active strategy -> {args.name} ({REGISTRY[args.name].title})")
+    set_active_strategy(args.name, cfg["market"])
+    print(f"{cfg['market'].name} active strategy -> {args.name} ({REGISTRY[args.name].title})")
 
 
 def cmd_scan(cfg, args):
@@ -87,14 +91,17 @@ def cmd_backtest(cfg, args):
     if args.trades:
         print()
         print(trades.tail(args.trades).to_string(index=False))
-    print("\nSaved all trades to data/backtest_trades.csv")
+    from dtrader.backtest import trades_csv
+    from dtrader.config import ROOT
+
+    print(f"\nSaved all trades to {trades_csv(cfg['market']).relative_to(ROOT)}")
 
 
 def cmd_hint(cfg, args):
     from dtrader.backtest import load_last_trades, run_backtest
     from dtrader.performance import strategy_hint
 
-    trades = load_last_trades()
+    trades = load_last_trades(cfg["market"])
     if args.refresh or trades.empty:
         trades = run_backtest(provider(cfg, args), cfg, all_strategies(cfg),
                               days=cfg.get("switch_hint", {}).get("lookback_days", 10),
@@ -103,18 +110,19 @@ def cmd_hint(cfg, args):
     print(h.table.to_string())
     print("\n" + h.message)
     if h.switch and h.recommended and args.apply:
-        set_active_strategy(h.recommended)
+        set_active_strategy(h.recommended, cfg["market"])
         print(f"Switched active strategy -> {h.recommended}")
     elif h.switch:
-        print(f"Run `python cli.py switch {h.recommended}` (or `hint --apply`) to switch.")
+        mk = "" if cfg["market"].key == "us" else f"--market {cfg['market'].key} "
+        print(f"Run `python cli.py {mk}switch {h.recommended}` (or `hint --apply`) to switch.")
 
 
 def cmd_monitor(cfg, args):
     from dtrader.alerts import run_monitor
 
     if args.strategy:
-        set_active_strategy(args.strategy)
-        cfg = load_config()
+        set_active_strategy(args.strategy, cfg["market"])
+        cfg = load_config(cfg["market"])
     p = provider(cfg, args)
     if cfg.get("switch_hint", {}).get("auto_switch"):
         from dtrader.backtest import run_backtest
@@ -125,8 +133,8 @@ def cmd_monitor(cfg, args):
         h = strategy_hint(t, cfg, names=list(REGISTRY))
         print(h.message)
         if h.switch and h.recommended:
-            set_active_strategy(h.recommended)
-            cfg = load_config()
+            set_active_strategy(h.recommended, cfg["market"])
+            cfg = load_config(cfg["market"])
     print(DISCLAIMER)
     try:
         run_monitor(p, cfg, once=args.once, session=args.session)
@@ -137,6 +145,17 @@ def cmd_monitor(cfg, args):
 def cmd_auth(cfg, args):
     from dtrader.data import get_provider
 
+    if cfg["market"].key == "india":
+        from dtrader.config import kite_keys
+        from dtrader.data.kite_provider import kite_login
+
+        keys = kite_keys()
+        if not keys:
+            sys.exit("Add KITE_API_KEY and KITE_API_SECRET to .env first (from developers.kite.trade).")
+        kite_login(keys[0], keys[1], (cfg.get("kite") or {}).get("redirect_url", "http://127.0.0.1:5010/kite"))
+        p = get_provider(cfg, "kite")
+        print(f"Zerodha login OK for today ({len(p.all_symbols())} F&O stocks available).")
+        return
     p = get_provider(cfg, "schwab")
     r = p.client.get_quotes(["AAPL"])
     print("Schwab login OK" if r.status_code == 200 else f"Schwab returned {r.status_code}: {r.text[:200]}")
@@ -144,7 +163,8 @@ def cmd_auth(cfg, args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--source", choices=["auto", "alpaca", "schwab", "yfinance"], help="override data_source")
+    ap.add_argument("--market", default="us", choices=["us", "india"], help="market to work on (default us)")
+    ap.add_argument("--source", choices=["auto", "alpaca", "schwab", "yfinance", "kite"], help="override data_source")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("strategies")
     s = sub.add_parser("switch"); s.add_argument("name")
@@ -162,7 +182,7 @@ def main():
                    help="for the daily job: skip holidays, stop 5 min after the close")
     sub.add_parser("auth")
     args = ap.parse_args()
-    cfg = load_config()
+    cfg = load_config(args.market)
     {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest,
      "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth}[args.cmd](cfg, args)
 

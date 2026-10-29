@@ -1,8 +1,8 @@
 # Day Trade Scanner
 
-Finds small-cap momentum stocks to day trade, ranks them for the strategy you
-choose, gives entry / stop / target / share size, and fires BUY and SELL
-alerts. A backtester scores every strategy on recent sessions and tells you
+Finds stocks to day trade in two markets: **US small-cap momentum** and
+**India (NSE F&O stocks)**. It ranks them for the strategy you choose, gives
+entry / stop / target / share size, and fires BUY and SELL alerts. A backtester scores every strategy on recent sessions and tells you
 when to switch.
 
 > Educational tool, not financial advice. It never places orders.
@@ -50,14 +50,37 @@ real-time data.
 With `data_source: auto` in `config.yaml`, the tool uses Alpaca if its keys
 are set, then Schwab, then Yahoo.
 
+### India: Zerodha Kite (optional, ₹500/month)
+
+India works right away on free Yahoo NSE data, which was near real-time in
+testing but is unofficial. For Zerodha's official feed:
+
+1. Subscribe to the **Kite Connect** plan at <https://developers.kite.trade>.
+   Market data and historical candles need the paid Connect plan; the free
+   Personal plan has none.
+2. Create an app and set its redirect URL to `http://127.0.0.1:5010/kite`.
+3. Put the API key and secret in `.env` as `KITE_API_KEY` and
+   `KITE_API_SECRET`.
+4. **Each trading morning**, run `./run.sh --market india auth`. Zerodha's login
+   page opens; sign in yourself. The tool never sees your password or TOTP,
+   and it saves the day's token to `data/india/kite_token.json`. Kite tokens
+   expire around 6:00 IST every day.
+
+If you haven't logged in yet when the India monitor starts, it pushes a
+reminder and uses Yahoo data. It switches to Kite within 2 minutes of your
+login.
+
 ## Daily use
 
 The launcher creates the virtualenv on first run:
 
 ```bash
-./run.sh                 # dashboard at http://localhost:8501
+./run.sh                 # dashboard at http://localhost:8501 (US/India switch in the sidebar)
 ./run.sh monitor         # live BUY/SELL alerts
 ./run.sh scan --all      # any cli.py command
+
+./run.sh --market india scan --all     # every command works for India with --market india
+./run.sh --market india backtest --days 20
 ```
 
 Or call the tools directly:
@@ -74,23 +97,26 @@ Or call the tools directly:
 ### Run automatically every market day (macOS)
 
 ```bash
-./scripts/autostart.sh install      # Mon-Fri at 18:00 local time (START_TIME=17:30 to change)
-./scripts/autostart.sh status       # is it scheduled / running, last log lines
-./scripts/autostart.sh run-now      # start today's job immediately
+./scripts/autostart.sh install          # US monitor 18:00, India monitor 09:00, dashboard always on
+./scripts/autostart.sh status           # what's scheduled / running, last log lines
+./scripts/autostart.sh run-now india    # start today's India (or us) job immediately
 ./scripts/autostart.sh uninstall
 ```
 
-The job runs `monitor --session`, which:
-- reads Alpaca's exchange calendar, exits right away on US holidays, and
-  knows about early closes;
-- uses US Eastern time itself, so the US daylight-saving change needs no
+Start times are local Mac time, Mon-Fri. Change them with, for example,
+`START_TIME=17:30 START_TIME_INDIA=08:55 ./scripts/autostart.sh install`.
+
+Each job runs `monitor --session`, which:
+- reads that market's exchange calendar, exits right away on its holidays,
+  and knows about early closes;
+- uses the market's own timezone, so the US daylight-saving change needs no
   edits;
 - stops 5 minutes after the close;
 - runs under `caffeinate`, so the Mac doesn't idle-sleep during the session.
 
 If the Mac is asleep at the start time, it runs as soon as the Mac wakes.
-Closing the lid on battery still puts the Mac to sleep. The log is in
-`data/monitor.log`.
+Closing the lid on battery still puts the Mac to sleep. Logs are in
+`data/monitor.log` for the US and `data/india/monitor.log` for India.
 
 ### Open the dashboard from your phone
 
@@ -129,6 +155,26 @@ Suggested routine: run `hint --refresh` before the open, start `monitor` at
 around 7:00 ET (premarket gappers), and keep the dashboard open for charts.
 Set `switch_hint.auto_switch: true` to let `monitor` pick the best recent
 strategy on start.
+
+## India: what's different
+
+- **Universe:** about 220 NSE F&O stocks, the most liquid names. They have no
+  fixed circuit limits, tight spreads, and intraday leverage. The list
+  refreshes daily from NSE.
+- **No premarket:** NSE has only a short pre-open auction. Gap & Go uses the
+  high of the first 5 minutes in place of the premarket high.
+- **Smaller moves:** gaps and filters are scaled for large caps, for example a
+  2% gap for Gap & Go and a 15-minute ORB.
+- **Exits:** flat by 15:10, before brokers' intraday (MIS) square-off around
+  15:20. No new entries after 13:00.
+- **Costs:** the backtest charges 0.08% per side to cover slippage and
+  STT/exchange fees.
+- **Rupees:** risk is set in rupees in the `india:` section of `config.yaml`
+  (default ₹2,500 per trade on a ₹5 lakh account).
+
+Each market keeps its own active strategy, backtest, switch hint, tracked
+trades and alerts. India data lives in `data/india/`. Phone pushes for India
+are prefixed with `[India]`.
 
 ## Strategies
 

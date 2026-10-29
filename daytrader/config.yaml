@@ -91,3 +91,65 @@ backtest:
   universe: market
   min_avg_volume: 100000     # skip illiquid names (10-day avg daily volume)
   max_symbols_per_day: 60    # strongest gappers per day to replay
+
+# ======================================================================
+# India (NSE F&O stocks). Anything here overrides the US settings above
+# for `--market india`. Prices and risk are in rupees.
+# ======================================================================
+india:
+  # auto: Zerodha Kite if KITE_API_KEY/SECRET are in .env and you logged in
+  # today (./run.sh --market india auth), else free Yahoo NSE data.
+  data_source: auto
+  kite:
+    redirect_url: http://127.0.0.1:5010/kite   # set the same URL in your Kite app
+
+  active_strategy: gap_and_go
+
+  universe:                   # scanned from the NSE F&O list (~220 stocks)
+    min_price: 50
+    max_price: 10000
+    min_gap_pct: 1.5          # F&O large caps move less than US small caps
+    min_rel_volume: 1.2
+    max_float_millions: null
+    max_candidates: 30
+    watchlist: []
+
+  risk:
+    account_size: 500000
+    risk_per_trade: 2500      # rupees lost if the stop is hit
+    max_position_pct: 25
+    reward_risk: 2.0
+
+  exits:
+    trail_after_r: 1.0
+    breakeven_after_r: 1.0
+    time_exit: "15:10"        # brokers auto square-off intraday (MIS) ~15:20
+    no_new_entries_after: "13:00"
+
+  strategies:
+    gap_and_go:
+      min_gap_pct: 2
+      min_premarket_volume: 0
+      open_range_minutes: 5   # NSE has no premarket: break of the first 5-min high
+    bull_flag:
+      min_day_gain_pct: 2.5
+      max_pullback_bars: 5
+      max_retrace_pct: 50
+      min_pole_pct: 1.2
+    orb:
+      range_minutes: 15
+      min_gap_pct: 1
+    vwap_reclaim:
+      min_gap_pct: 1.5
+    red_to_green:
+      min_dip_pct: 1
+    oversold_bounce:
+      min_flush_pct: 3
+      rsi_max: 25
+      min_gap_pct: 1
+
+  backtest:
+    slippage_pct: 0.08        # per side: slippage + STT/exchange charges
+    universe: market          # every F&O stock that gapped each day
+    min_avg_volume: 200000
+    max_symbols_per_day: 40

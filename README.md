@@ -1,7 +1,7 @@
 # Day Trade Scanner
 
-A small-cap momentum scanner. It finds stocks worth day trading, ranks them for
-the strategy you pick, gives entry / stop / target / share size, and sends
+A day-trading scanner for **US small caps** and **Indian NSE F&O stocks**. It
+finds stocks worth day trading, ranks them for the strategy you pick, gives entry / stop / target / share size, and sends
 BUY and SELL alerts. A market-wide backtester scores every strategy on recent
 sessions and tells you when to switch.
 
@@ -21,7 +21,10 @@ sessions and tells you when to switch.
   using only what's known at the open.
 - **Strategy-switch hint:** compares recent expectancy across strategies and
   suggests when to switch or sit out.
-- **Data sources:** Alpaca (free plan), Schwab, or Yahoo with no key.
+- **Two markets:** US (premarket gappers) and India (NSE F&O, IST hours).
+  Switch in the dashboard or with `--market india`.
+- **Data sources:** Alpaca (free plan), Schwab, or Yahoo for the US; Zerodha
+  Kite or free Yahoo NSE data for India.
 
 ## Quick start
 
@@ -39,11 +42,12 @@ the setup steps below.
 ./daytrader/run.sh backtest --days 30
 ./daytrader/run.sh hint               # should I switch strategies?
 ./daytrader/run.sh switch gap_and_go
+./daytrader/run.sh --market india scan --all   # same commands for NSE
 ```
 
 ## Documentation
 
-Full setup (Alpaca and Schwab keys), strategy rules, exits, configuration
+Full setup (Alpaca, Schwab and Zerodha keys), strategy rules, exits, configuration
 and known limits are in [daytrader/README.md](daytrader/README.md).
 
 ## Layout
@@ -55,7 +59,8 @@ daytrader/
   dashboard.py      Streamlit dashboard
   config.yaml       filters, risk, exits, strategy parameters
   dtrader/
-    data/           Alpaca, Schwab and Yahoo providers
+    markets/        US / India session hours, calendars, F&O list
+    data/           Alpaca, Schwab, Zerodha Kite and Yahoo providers
     strategies/     one file per strategy + registry
     scanner.py      finds and ranks today's movers
     backtest.py     market-wide replay of recent sessions

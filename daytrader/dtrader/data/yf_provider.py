@@ -8,7 +8,8 @@ from datetime import date, timedelta
 import pandas as pd
 import yfinance as yf
 
-from .base import BAR_COLS, DataProvider, empty_bars, to_ny_index
+from ..markets import INDIA, india_fo_symbols
+from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, to_tz_index
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore", module="yfinance")
@@ -17,6 +18,11 @@ warnings.filterwarnings("ignore", message=".*inplace.*")
 
 class YFinanceProvider(DataProvider):
     name = "yfinance"
+    suffix = ""          # Yahoo ticker suffix (".NS" for NSE)
+    prepost = True       # request extended-hours bars
+
+    def _y(self, symbol: str) -> str:
+        return symbol + self.suffix
 
     def __init__(self):
         self._screen_quotes: dict[str, dict] = {}
@@ -75,7 +81,7 @@ class YFinanceProvider(DataProvider):
             stop = min(cur + timedelta(days=7), end + timedelta(days=1))
             try:
                 df = yf.download(
-                    symbol, start=cur, end=stop, interval="1m", prepost=True,
+                    self._y(symbol), start=cur, end=stop, interval="1m", prepost=self.prepost,
                     progress=False, auto_adjust=False, multi_level_index=False,
                 )
             except Exception:
@@ -84,15 +90,15 @@ class YFinanceProvider(DataProvider):
                 frames.append(df)
             cur = stop
         if not frames:
-            return empty_bars()
+            return empty_bars(self.market.tz)
         df = pd.concat(frames)
         df.columns = [c.lower() for c in df.columns]
-        df = to_ny_index(df[BAR_COLS].dropna())
+        df = to_tz_index(df[BAR_COLS].dropna(), self.market.tz)
         return df[~df.index.duplicated()].sort_index()
 
     def daily(self, symbol: str, days: int = 60) -> pd.DataFrame:
         df = yf.download(
-            symbol, period=f"{max(days, 5)}d", interval="1d", progress=False,
+            self._y(symbol), period=f"{max(days, 5)}d", interval="1d", progress=False,
             auto_adjust=False, multi_level_index=False,
         )
         if not len(df):
@@ -100,3 +106,76 @@ class YFinanceProvider(DataProvider):
         df.columns = [c.lower() for c in df.columns]
         df.index = pd.to_datetime(df.index).tz_localize(None)
         return df[BAR_COLS].dropna()
+
+
+class YFinanceIndiaProvider(YFinanceProvider):
+    """Free NSE data from Yahoo (SYMBOL.NS). Unofficial and may be delayed;
+    about 30 days of 1-minute history. Universe = NSE F&O stocks."""
+
+    name = "yfinance_in"
+    market = INDIA
+    suffix = ".NS"
+    prepost = False  # NSE has no continuous premarket session
+
+    def all_symbols(self) -> list[str]:
+        return india_fo_symbols()
+
+    def _daily_batch(self, symbols: list[str], days: int) -> dict[str, pd.DataFrame]:
+        out: dict[str, pd.DataFrame] = {}
+        for i in range(0, len(symbols), 100):
+            chunk = symbols[i:i + 100]
+            try:
+                df = yf.download([self._y(s) for s in chunk], period=f"{int(days * 1.6) + 5}d",
+                                 interval="1d", group_by="ticker", progress=False,
+                                 auto_adjust=False, threads=True)
+            except Exception:
+                continue
+            for s in chunk:
+                try:
+                    d = df[self._y(s)].copy()
+                except KeyError:
+                    continue
+                d.columns = [c.lower() for c in d.columns]
+                d.index = pd.to_datetime(d.index).tz_localize(None)
+                d = d[BAR_COLS].dropna()
+                if len(d):
+                    out[s] = d.tail(days)
+        return out
+
+    def daily_many(self, symbols: list[str], days: int = 60) -> dict[str, pd.DataFrame]:
+        path = CACHE_DIR / self.name / f"daily_many_{self.market.now().date()}_{days}_{len(symbols)}.pkl"
+        if path.exists():
+            return pd.read_pickle(path)
+        out = self._daily_batch(symbols, days)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pd.to_pickle(out, path)
+        return out
+
+    def quotes(self, symbols: list[str]) -> pd.DataFrame:
+        today = self.market.now().date()
+        rows = []
+        for s, d in self._daily_batch(symbols, 15).items():
+            prior = d[d.index.date < today]
+            cur = d[d.index.date == today]
+            if not len(prior):
+                continue
+            rows.append({
+                "symbol": s,
+                "last": float((cur if len(cur) else prior)["close"].iloc[-1]),
+                "prev_close": float(prior["close"].iloc[-1]),
+                "volume": float(cur["volume"].iloc[-1]) if len(cur) else 0.0,
+                "avg_volume": float(prior["volume"].tail(10).mean()),
+            })
+        return pd.DataFrame(rows).set_index("symbol") if rows else pd.DataFrame(
+            columns=["last", "prev_close", "volume", "avg_volume"])
+
+    def movers(self, limit: int = 50) -> list[str]:
+        """No gainers screener for NSE: rank the F&O list by % change."""
+        q = self.quotes(self.all_symbols())
+        if q.empty:
+            return []
+        q["chg"] = q["last"] / q["prev_close"] - 1
+        q["rv"] = q["volume"] / q["avg_volume"].where(q["avg_volume"] > 0)
+        top = list(q.sort_values("chg", ascending=False).index[:limit])
+        active = [s for s in q.sort_values("rv", ascending=False).index[:limit // 2] if s not in top]
+        return (top + active)[:limit]

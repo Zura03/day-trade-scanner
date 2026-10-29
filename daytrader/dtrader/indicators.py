@@ -2,20 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, time
+from datetime import date
 
 import numpy as np
 import pandas as pd
 
-OPEN = time(9, 30)
-CLOSE = time(16, 0)
+from .markets import US, Market
 
 
-def add_indicators(bars: pd.DataFrame) -> pd.DataFrame:
+def add_indicators(bars: pd.DataFrame, market: Market = US) -> pd.DataFrame:
     df = bars.copy()
     t = df.index.time
-    df["regular"] = (t >= OPEN) & (t < CLOSE)
-    df["pre"] = t < OPEN
+    df["regular"] = (t >= market.open) & (t < market.close)
+    df["pre"] = t < market.open
     tp = (df["high"] + df["low"] + df["close"]) / 3
     # Session VWAP: premarket VWAP before the open, resets at 9:30.
     seg = np.where(df["regular"], 1, np.where(df["pre"], 0, 2))
@@ -68,9 +67,10 @@ class DayContext:
 
 
 def build_context(symbol: str, day: date, bars: pd.DataFrame, prev_close: float,
-                  avg_volume: float = 0.0, float_shares: float | None = None) -> DayContext:
-    pre = bars[bars.index.time < OPEN]
-    reg = bars[(bars.index.time >= OPEN) & (bars.index.time < CLOSE)]
+                  avg_volume: float = 0.0, float_shares: float | None = None,
+                  market: Market = US) -> DayContext:
+    pre = bars[bars.index.time < market.open]
+    reg = bars[(bars.index.time >= market.open) & (bars.index.time < market.close)]
     ctx = DayContext(symbol=symbol, day=day, prev_close=prev_close, avg_volume=avg_volume,
                      float_shares=float_shares)
     if len(pre):

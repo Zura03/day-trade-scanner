@@ -12,6 +12,7 @@ import streamlit as st  # noqa: E402
 from dtrader.alerts import load_alerts  # noqa: E402
 from dtrader.backtest import load_last_trades, run_backtest, summarize  # noqa: E402
 from dtrader.config import load_config, load_state, set_active_strategy  # noqa: E402
+from dtrader.markets import MARKETS  # noqa: E402
 from dtrader.data import get_provider  # noqa: E402
 from dtrader.performance import load_journal, strategy_hint  # noqa: E402
 from dtrader.scanner import scan  # noqa: E402
@@ -49,40 +50,55 @@ def require_password() -> None:
 require_password()
 
 
-@st.cache_resource(show_spinner="Connecting to data source...")
-def provider_for(source: str):
-    return get_provider(load_config(), source)
+@st.cache_resource(show_spinner="Connecting to data source...", ttl=600)
+def provider_for(market_key: str, source: str, kite_token: str | None):
+    # kite_token is part of the cache key so a fresh Zerodha login is picked up
+    return get_provider(load_config(market_key), source)
 
 
-cfg = load_config()
+SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "kite", "yfinance"]}
 
 # ---------------- sidebar ------------------------------------------------
 with st.sidebar:
     st.title("📈 Day Trade Scanner")
-    source = st.selectbox("Data source", ["auto", "alpaca", "schwab", "yfinance"],
-                          index=["auto", "alpaca", "schwab", "yfinance"].index(cfg.get("data_source", "auto")))
+    mkey = st.radio("Market", list(MARKETS), horizontal=True, key="market",
+                    format_func=lambda k: f"{MARKETS[k].flag} {MARKETS[k].name}")
+    cfg = load_config(mkey)
+    mk = cfg["market"]
+    opts = SOURCES[mkey]
+    source = st.selectbox("Data source", opts, key=f"source_{mkey}",
+                          index=opts.index(cfg.get("data_source", "auto")) if cfg.get("data_source", "auto") in opts else 0)
+    kite_tok = None
+    if mkey == "india":
+        from dtrader.data import kite_login_needed
+        from dtrader.data.kite_provider import token_valid_today
+
+        kite_tok = token_valid_today()
     try:
-        prov = provider_for(source)
+        prov = provider_for(mkey, source, kite_tok)
         st.caption(f"Using **{prov.name}** data")
     except Exception as e:
         st.error(f"Data source error: {e}")
         st.stop()
+    if mkey == "india" and kite_login_needed():
+        st.warning("Zerodha not logged in today - using free Yahoo data. "
+                   "Log in on the Mac with `./run.sh --market india auth`.")
 
     names = list(REGISTRY)
     active = st.selectbox("Active strategy", names, index=names.index(cfg["active_strategy"]),
                           format_func=lambda n: REGISTRY[n].title)
     if active != cfg["active_strategy"]:
-        set_active_strategy(active)
-        cfg = load_config()
+        set_active_strategy(active, mk)
+        cfg = load_config(mk)
         st.toast(f"Switched to {REGISTRY[active].title}")
     st.caption(REGISTRY[active].description)
 
-    trades_cached = load_last_trades()
+    trades_cached = load_last_trades(mk)
     if len(trades_cached):
         h = strategy_hint(trades_cached, cfg, names=names)
         (st.warning if h.switch else st.info)(h.message)
         if h.switch and h.recommended and st.button(f"Switch to {REGISTRY[h.recommended].title}"):
-            set_active_strategy(h.recommended)
+            set_active_strategy(h.recommended, mk)
             st.rerun()
     else:
         st.info("Run a backtest to get strategy-switch hints.")
@@ -100,8 +116,9 @@ tab_picks, tab_bt, tab_hint, tab_alerts, tab_guide = st.tabs(
 # ---------------- chart helper --------------------------------------------
 def candle_chart(cand, sig=None, watch=None, title=""):
     df = cand.bars
-    df = df[df.index.time >= pd.Timestamp("07:00").time()]
-    df = df[df.index.time <= pd.Timestamp("16:00").time()]
+    start = (pd.Timestamp.combine(pd.Timestamp.today(), mk.open) - pd.Timedelta(hours=2.5)).time() \
+        if mk.premarket else mk.open
+    df = df[(df.index.time >= start) & (df.index.time <= mk.close)]
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"],
                                  close=df["close"], name=cand.symbol,
@@ -109,7 +126,9 @@ def candle_chart(cand, sig=None, watch=None, title=""):
     fig.add_trace(go.Scatter(x=df.index, y=df["vwap"], name="VWAP", line=dict(color="#ab47bc", width=1.5)))
     fig.add_trace(go.Scatter(x=df.index, y=df["ema9"], name="EMA 9", line=dict(color="#ffa726", width=1)))
     ctx = cand.ctx
-    lines = [(ctx.prev_close, "prev close", "#90a4ae"), (ctx.premarket_high, "PM high", "#42a5f5")]
+    lines = [(ctx.prev_close, "prev close", "#90a4ae")]
+    if mk.premarket:
+        lines.append((ctx.premarket_high, "PM high", "#42a5f5"))
     if sig:
         lines += [(sig.entry, "entry", "#26a69a"), (sig.stop, "stop", "#ef5350"), (sig.target, "target", "#66bb6a")]
         fig.add_trace(go.Scatter(x=[sig.time], y=[sig.entry], mode="markers", name="signal",
@@ -123,7 +142,9 @@ def candle_chart(cand, sig=None, watch=None, title=""):
                           annotation_font_color=color)
     fig.update_layout(height=520, title=title, xaxis_rangeslider_visible=False,
                       margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h"))
-    fig.update_xaxes(rangebreaks=[dict(bounds=[16, 7], pattern="hour")])
+    hi = mk.close.hour + mk.close.minute / 60
+    lo = start.hour + start.minute / 60
+    fig.update_xaxes(rangebreaks=[dict(bounds=[hi, lo], pattern="hour")])
     return fig
 
 
@@ -141,13 +162,14 @@ def style_status(v):
 @st.fragment(run_every=60 if auto else None)
 def picks():
     strats = all_strategies(cfg) if compare else [strategy]
-    if st.button("🔄 Scan now", type="primary") or "scan" not in st.session_state or auto:
+    key = f"scan_{mk.key}"
+    if st.button("🔄 Scan now", type="primary") or key not in st.session_state or auto:
         with st.spinner("Scanning movers..."):
             logs = []
             df, cands = scan(prov, cfg, strats, log=logs.append)
-            st.session_state.scan = (df, cands, pd.Timestamp.now(tz="America/New_York"), logs)
-    df, cands, ts, logs = st.session_state.scan
-    st.caption(f"Last scan {ts:%H:%M:%S} ET - {logs[0] if logs else ''}")
+            st.session_state[key] = (df, cands, mk.now(), logs)
+    df, cands, ts, logs = st.session_state[key]
+    st.caption(f"{mk.flag} Last scan {ts:%H:%M:%S} {mk.tz_label} - {logs[0] if logs else ''}")
     if df.empty:
         st.info("No stocks pass the universe filters right now (price / gap / relative volume / float).")
         return
@@ -185,20 +207,20 @@ with tab_picks:
 # ---------------- backtest ------------------------------------------------
 with tab_bt:
     c1, c2 = st.columns([1, 3])
-    days = c1.slider("Sessions", 3, {"yfinance": 25, "schwab": 45}.get(prov.name, 90), 10)
+    days = c1.slider("Sessions", 3, {"yfinance": 25, "yfinance_in": 25, "schwab": 45}.get(prov.name, 90), 10)
     extra = c2.text_input("Extra symbols (space separated, optional)")
     if st.button("Run backtest", type="primary"):
         logbox = st.empty()
         syms = None
         if extra.strip():
             from dtrader.scanner import history_symbols
-            syms = sorted(set(history_symbols(days=days + 5)) | set(extra.upper().split()))
+            syms = sorted(set(history_symbols(days=days + 5, market=mk)) | set(extra.upper().split()))
         with st.spinner("Replaying sessions bar by bar..."):
             trades = run_backtest(prov, cfg, all_strategies(cfg), days=days, symbols=syms,
                                   log=lambda m: logbox.caption(m))
-        st.session_state.bt = trades
+        st.session_state[f"bt_{mk.key}"] = trades
         st.rerun()
-    trades = st.session_state.get("bt", load_last_trades())
+    trades = st.session_state.get(f"bt_{mk.key}", load_last_trades(mk))
     if len(trades):
         st.dataframe(summarize(trades, names), use_container_width=True)
         fig = go.Figure()
@@ -221,13 +243,13 @@ with tab_bt:
 
 # ---------------- hint ----------------------------------------------------
 with tab_hint:
-    t = st.session_state.get("bt", load_last_trades())
+    t = st.session_state.get(f"bt_{mk.key}", load_last_trades(mk))
     h = strategy_hint(t, cfg, names=names)
     (st.warning if h.switch else st.success)(h.message)
     st.dataframe(h.table, use_container_width=True)
     if h.switch and h.recommended:
         if st.button(f"Apply: switch to {REGISTRY[h.recommended].title}", key="apply_hint"):
-            set_active_strategy(h.recommended)
+            set_active_strategy(h.recommended, mk)
             st.rerun()
     sh = cfg.get("switch_hint", {})
     st.caption(f"Judged on the last {sh.get('lookback_days', 10)} sessions; a strategy needs "
@@ -236,20 +258,21 @@ with tab_hint:
 
 # ---------------- alerts --------------------------------------------------
 with tab_alerts:
-    st.markdown("Live alerts come from the monitor. Run it in a terminal during market hours:")
-    st.code("python cli.py monitor", language="bash")
-    pos = load_state().get("positions", [])
+    st.markdown(f"Live {mk.name} alerts come from the monitor, which the daily job starts "
+                "automatically (`./scripts/autostart.sh status`). To run it by hand:")
+    st.code("./run.sh monitor" if mk.key == "us" else f"./run.sh --market {mk.key} monitor", language="bash")
+    pos = load_state(mk).get("positions", [])
     st.subheader(f"Open tracked trades ({len(pos)})")
     if pos:
         st.dataframe(pd.DataFrame(pos)[["symbol", "strategy", "entry_time", "entry", "stop", "target", "shares"]],
                      use_container_width=True, hide_index=True)
-    al = load_alerts()
+    al = load_alerts(market=mk)
     st.subheader("Alert log")
     if len(al):
         st.dataframe(al.iloc[::-1], use_container_width=True, hide_index=True)
     else:
         st.caption("No alerts yet.")
-    j = load_journal()
+    j = load_journal(mk)
     st.subheader("Closed trades (journal)")
     if len(j):
         st.dataframe(j[["day", "symbol", "strategy", "entry", "exit_price", "exit_reason", "r", "shares"]].iloc[::-1],
