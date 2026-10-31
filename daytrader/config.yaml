@@ -152,6 +152,20 @@ india:
       min_flush_pct: 3
       rsi_max: 25
       min_gap_pct: 1
+    vwap_bounce:
+      min_gap_pct: 1.5
+    first_hour_trend:
+      min_trend_pct: 1.2
+    rip_and_dip:
+      min_gap_pct: 2
+    gap_down_bounce:
+      min_gap_down_pct: 4
+      min_flush_pct: 1.5
+    opening_reversal:
+      min_drop_pct: 0.8
+    orb_retest:
+      range_minutes: 15
+      min_gap_pct: 1
 
   backtest:
     slippage_pct: 0.08        # per side: slippage + STT/exchange charges

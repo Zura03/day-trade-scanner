@@ -214,6 +214,24 @@ are prefixed with `[India]`.
 | `vwap_reclaim` | gapper dips under VWAP | close back above VWAP on volume | low of the dip |
 | `red_to_green` | red on the day, day-2 runners | cross back above yesterday's close | low of day |
 | `oversold_bounce` | mean reversion after an 8%+ flush, RSI < 25 | reversal candle | flush low, target VWAP |
+| `vwap_bounce` | trending above VWAP, pulls back to it | long lower wick through VWAP on 1.5x volume, closes above | wick low |
+| `first_hour_trend` | first hour closed 3%+ up (NSE 1.2%) and above VWAP | break of a fresh 20 EMA pullback candle | low of last 3 candles |
+| `stop_hunt` | dips below yesterday's low (stop hunt) | reclaim of yesterday's low | sweep low |
+| `rip_and_dip` | gapper breaks the premarket high in the first 15 min, dips back | reclaim of the premarket high | dip low |
+| `gap_down_bounce` | bagholder bounce: gap-down 15%+ (NSE 4%+) flushes to a new low | first green candle back over the 9 EMA | flush low |
+| `opening_reversal` | sold off 2%+ from the open (NSE 0.8%) | first break of the last 3 candles' high, 15-35 min after the open | low of day |
+| `orb_retest` | close above the 5-min range high (NSE 15), retest holds | break of the retest candle's high | retest low |
+
+The last seven come from the r/Daytrading "strategies that actually work" post,
+long side only. The rest of that post wasn't added:
+- short trades (broken-parabolic short, fake-halt short, merger-arb short);
+- setups that need options, Level 2 or dark-pool data;
+- news-event trades (FOMC fade, earnings reversal);
+- premarket and after-hours setups.
+
+In the first backtests (US over 30 sessions, India over 15), none of the seven
+beat Gap & Go (US) or ORB and Gap & Go (India). Most were negative. They stay
+in the list so the switch hint keeps measuring them as conditions change.
 
 All strategies share the same exits: stop, 2R target, breakeven at +1R, and
 after +1R a sell on a 1-min close below the 9 EMA. Everything is flat by

@@ -193,6 +193,10 @@ class Strategy:
     def regular_rows(self, df: pd.DataFrame) -> np.ndarray:
         return np.flatnonzero(df["regular"].to_numpy())
 
+    def minutes_since_open(self, ts: pd.Timestamp) -> float:
+        open_ts = pd.Timestamp(datetime.combine(ts.date(), self.market.open, self.market.tz))
+        return (ts - open_ts).total_seconds() / 60
+
     def opening_range(self, df: pd.DataFrame, minutes: int) -> tuple[int, float, float] | None:
         """(first row after the range, range high, range low) for the first
         `minutes` minutes after the market open - by clock time, so missing
