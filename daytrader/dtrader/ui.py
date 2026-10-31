@@ -99,6 +99,12 @@ def action_cell(v) -> str:
             "NO DATA": f"color:{MUTED}"}.get(v, "")
 
 
+def verdict_cell(v) -> str:
+    return {"Favourable": f"color:{GOOD};font-weight:600", "Unfavourable": f"color:{BAD};font-weight:600",
+            "Target out of reach": f"color:{WARN}", "Coin flip": f"color:{INK_2}",
+            "No track record": f"color:{MUTED}"}.get(v, "")
+
+
 def signed_cell(v) -> str:
     """Green/red for signed values (numbers or '+0.22R' strings)."""
     try:

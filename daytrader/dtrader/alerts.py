@@ -139,7 +139,7 @@ class Monitor:
             a = analyse(self.strategy, c)
             s = a["signal"]
             if a["status"] == "BUY NOW" and s and not self._seen(f"buy|{s.symbol}|{s.strategy}|{s.time}"):
-                self._open(s, c.last, day)
+                self._open(s, c.last, day, c)
             elif a["status"] == "SETTING UP" and a["watch"] and not self._seen(f"watch|{c.symbol}|{day}|{self.strategy.name}"):
                 notify("WATCH", f"{c.symbol} near trigger {a['watch'][0]:.2f}",
                        f"last {c.last:.2f}, {a['watch'][1]} ({self.strategy.title})", self.cfg)
@@ -168,7 +168,7 @@ class Monitor:
                        f"{adv.reason}. Last {adv.last:.2f}, {adv.r_now:+.2f}R, {pnl}. "
                        "Record the sale in the dashboard (My positions).", self.cfg)
 
-    def _open(self, s, last: float, day) -> None:
+    def _open(self, s, last: float, day, cand=None) -> None:
         """BUY alert + tracked position, with the backtest's rules: one open
         position per symbol, max trades per symbol per day, and a fill at the
         current price (skip if it has already run more than MAX_CHASE_R past the trigger)."""
@@ -186,9 +186,20 @@ class Monitor:
         sh = self.strategy.position_size(s)
         if sh <= 0:
             return
+        odds = ""
+        if cand is not None:
+            try:
+                from .odds import setup_odds
+
+                o = setup_odds(self.p, self.cfg, self.strategy, s, cand.bars, last)
+                if o:
+                    odds = (f" | {o.verdict}: reach T {o.p_target:.0%} / S {o.p_stop:.0%}"
+                            f" / neither {o.p_open:.0%}; record {o.history_text()}")
+            except Exception as e:
+                print(f"odds {s.symbol}: {e}", file=sys.stderr, flush=True)
         notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
                f"stop {s.stop:.2f} / target {s.target:.2f} / {sh} sh "
-               f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}", self.cfg)
+               f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{odds}", self.cfg)
         self.state["positions"].append(Position.from_signal(s, sh).to_dict())
         taken[tkey] = taken.get(tkey, 0) + 1
 

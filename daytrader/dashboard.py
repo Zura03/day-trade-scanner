@@ -233,8 +233,8 @@ def candle_chart(cand, sig=None, watch=None, title=""):
 
 
 # ---------------- buyable now ---------------------------------------------
-def buyable_section(df: pd.DataFrame) -> None:
-    """Every setup that is buyable right now, across all strategies."""
+def buyable_section(df: pd.DataFrame, cands: list) -> None:
+    """Every setup that is buyable right now, across all strategies, with its odds."""
     recent = strategy_hint(load_last_trades(mk), cfg, names=names).table
     b = buyable_now(df, strategy.name, recent)
     st.markdown(ui.section("Buyable now", f"{len(b)} across all strategies"), unsafe_allow_html=True)
@@ -252,8 +252,24 @@ def buyable_section(df: pd.DataFrame) -> None:
             return f"too few trades ({r.strategy_trades})"
         return f"{r.strategy_R:+.2f}R ({r.strategy_trades})"
 
+    from dtrader.odds import setup_odds
+
+    by_sym = {c.symbol: c for c in cands}
+    odds = []
+    with st.spinner("Working out the odds for each setup..."):
+        for r in b.itertuples():
+            c = by_sym.get(r.symbol)
+            sig = (c.results.get(r.strategy) or {}).get("signal") if c else None
+            try:
+                odds.append(setup_odds(prov, cfg, get_strategy(r.strategy, cfg), sig, c.bars, c.last) if sig else None)
+            except Exception:
+                odds.append(None)
     show = pd.DataFrame({
         "Symbol": b["symbol"],
+        "Verdict": [o.verdict if o else "–" for o in odds],
+        "Reach (target / stop / neither)": [f"{o.p_target:.0%} / {o.p_stop:.0%} / {o.p_open:.0%}" if o else "–"
+                                            for o in odds],
+        "Track record": [o.history_text() if o else "–" for o in odds],
         "Strategy": [REGISTRY[n].title + ("  (active)" if a else "") for n, a in zip(b["strategy"], b["active"])],
         "Strategy lately": [lately(r) for r in b.itertuples()],
         "Triggered": b["triggered_at"],
@@ -262,13 +278,17 @@ def buyable_section(df: pd.DataFrame) -> None:
         "Setup": b["why"],
     })
     money = st.column_config.NumberColumn(format="%.2f")
-    st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately"]), width="stretch", hide_index=True,
+    st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately"]).map(ui.verdict_cell, subset=["Verdict"]),
+                 width="stretch", hide_index=True,
                  column_config={"Entry": money, "Last": money, "Stop": money, "Target": money,
                                 "Past entry": st.column_config.NumberColumn(format="%+.2fR"),
                                 "Shares": st.column_config.NumberColumn(format="%d"),
                                 "Setup": st.column_config.TextColumn(width="large")})
-    st.caption(f"Only your active strategy ({strategy.title}) sends alerts. 'Strategy lately' is its average "
-               "R per trade over recent sessions (trades in brackets); red means it has been losing money.")
+    st.caption(f"Only your active strategy ({strategy.title}) sends alerts. Reach: from the current price, how "
+               "often a replay of the rest of today (10,000 runs on this stock's own minute bars, scaled to "
+               "today's volatility, no assumed trend) hits the target first, the stop first, or neither by the "
+               "time exit. Track record: this rule on this stock over its last 20 sessions - the verdict is "
+               "based on it (5+ trades needed). 'Strategy lately': the strategy's average R across all stocks.")
 
 
 # ---------------- picks ---------------------------------------------------
@@ -291,7 +311,7 @@ def picks():
                     unsafe_allow_html=True)
         return
     view = df if compare else df[df["strategy"] == strategy.name]
-    buyable_section(df)
+    buyable_section(df, cands)
     st.markdown(ui.section(f"{strategy.title} scan" if not compare else "All strategies",
                            f"{view['symbol'].nunique()} candidates"), unsafe_allow_html=True)
     st.markdown(ui.tiles([

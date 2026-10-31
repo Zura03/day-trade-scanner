@@ -65,7 +65,7 @@ def cmd_scan(cfg, args):
     p = provider(cfg, args)
     every = args.all or args.buyable
     strats = all_strategies(cfg) if every else [get_strategy(args.strategy or cfg["active_strategy"], cfg)]
-    df, _ = scan(p, cfg, strats, log=lambda m: print(m, file=sys.stderr))
+    df, cands = scan(p, cfg, strats, log=lambda m: print(m, file=sys.stderr))
     if df.empty:
         print("No candidates passed the filters right now.")
         return
@@ -79,10 +79,21 @@ def cmd_scan(cfg, args):
         if b.empty:
             print("Nothing is buyable right now.")
             return
+        from dtrader.odds import setup_odds
+
+        by_sym = {c.symbol: c for c in cands}
+        verdict, reach, record = [], [], []
+        for r in b.itertuples():
+            c = by_sym[r.symbol]
+            o = setup_odds(p, cfg, get_strategy(r.strategy, cfg), c.results[r.strategy]["signal"], c.bars, c.last)
+            verdict.append(o.verdict if o else "-")
+            reach.append(f"{o.p_target:.0%}/{o.p_stop:.0%}/{o.p_open:.0%}" if o else "-")
+            record.append(o.history_text() if o else "-")
+        b["verdict"], b["reach_T/S/none"], b["track_record"] = verdict, reach, record
         b.insert(0, "*", ["*" if a else "" for a in b["active"]])
         b["strategy_R"] = b["strategy_R"].map(lambda v: "" if v != v else f"{v:+.2f}")
-        cols = ["*", "symbol", "strategy", "strategy_R", "strategy_trades", "triggered_at", "entry", "last",
-                "r_from_entry", "stop", "target", "shares", "why"]
+        cols = ["*", "symbol", "strategy", "verdict", "reach_T/S/none", "track_record", "strategy_R",
+                "triggered_at", "entry", "last", "r_from_entry", "stop", "target", "shares"]
         print(b[cols].to_string(index=False))
         print(f"\n* = active strategy ({cfg['active_strategy']}), the only one the monitor alerts on. "
               f"strategy_R = its recent average R per trade.\n{DISCLAIMER}")

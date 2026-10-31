@@ -275,6 +275,31 @@ shows realized P&L, win rate and average R. `./run.sh positions` prints
 everything in the terminal. Your positions are stored in
 `data/[india/]my_positions.json`, and closed trades in `my_trades.jsonl`.
 
+## Setup odds (in Buyable now and BUY alerts)
+
+Every buyable setup gets three extra readings, inspired by the "Time Machine"
+in [day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill):
+
+- **Reach (target / stop / neither):** from the current price, the rest of
+  today is replayed 10,000 times. Each future minute is drawn from this stock's
+  own 1-minute bars at the same time of day over its last 20 sessions, scaled
+  to how volatile the stock is today. The replays assume no trend: 20 sessions
+  are too few to measure one, and the average move per minute is mostly noise
+  that adds up to a fake trend over a few hours. So Reach tells you whether
+  the target or the stop is realistically within range before the time exit,
+  not whether the trade has an edge.
+- **Track record:** the same strategy rule re-run on this stock's last 20
+  sessions: how often it fired, how often it hit the target, and its average R.
+- **Verdict:**
+  - **Target out of reach** if it's likely to still be open at the time exit
+    (50% or more);
+  - **No track record** if the rule fired fewer than 5 times on this stock;
+  - otherwise **Favourable** (average R +0.2 or better), **Unfavourable**
+    (−0.1 or worse) or **Coin flip**.
+
+`./run.sh scan --buyable` shows the same columns. The BUY push includes the
+verdict and the reach odds. The odds are a sanity check, not a forecast.
+
 ## What the statuses mean
 
 - **BUY NOW:** the setup triggered and is still buyable. The trade it started
