@@ -17,8 +17,10 @@ from dtrader.data import get_provider  # noqa: E402
 from dtrader.performance import load_journal, strategy_hint  # noqa: E402
 from dtrader.scanner import buyable_now, scan  # noqa: E402
 from dtrader.strategies import REGISTRY, all_strategies, get_strategy  # noqa: E402
+from dtrader import ui  # noqa: E402
 
-st.set_page_config(page_title="Day Trade Scanner", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Day Trade Scanner", page_icon=":material/candlestick_chart:", layout="wide")
+st.markdown(ui.CSS, unsafe_allow_html=True)
 
 
 def _dash_secret() -> bytes:
@@ -76,7 +78,7 @@ def require_password() -> None:
         if not _token_ok(pw, st.query_params.get("k", "")):
             st.query_params["k"] = _token(pw, date.today().strftime("%Y%m%d"))
         return
-    st.title("📈 Day Trade Scanner")
+    st.markdown(ui.section("Day Trade Scanner"), unsafe_allow_html=True)
     entered = st.text_input("Password", type="password")
     if entered and hmac.compare_digest(entered.encode(), pw.encode()):
         st.session_state.authed = True
@@ -110,13 +112,14 @@ SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "gr
 
 # ---------------- sidebar ------------------------------------------------
 with st.sidebar:
-    st.title("📈 Day Trade Scanner")
+    st.markdown(f'<div style="font-weight:650;font-size:1rem;margin:0.2rem 0 0.8rem">Day Trade Scanner</div>',
+                unsafe_allow_html=True)
     if "market" not in st.session_state:  # open on whichever market is trading now
         live = [k for k, m in MARKETS.items()
                 if (h := m.session_hours(m.now().date())) and m.now().time() >= m.day_start and m.now() < h[1]]
         st.session_state["market"] = live[0] if live else "us"
-    mkey = st.radio("Market", list(MARKETS), horizontal=True, key="market",
-                    format_func=lambda k: f"{MARKETS[k].flag} {MARKETS[k].name}")
+    mkey = st.segmented_control("Market", list(MARKETS), key="market", required=True,
+                                format_func=lambda k: MARKETS[k].name, width="stretch")
     cfg = load_config(mkey)
     mk = cfg["market"]
     opts = SOURCES[mkey]
@@ -129,7 +132,6 @@ with st.sidebar:
         broker_tok = india_token_state()
     try:
         prov = provider_for(mkey, source, broker_tok)
-        st.caption(f"Using **{prov.name}** data")
     except Exception as e:
         st.error(f"Data source error: {e}")
         st.stop()
@@ -151,25 +153,31 @@ with st.sidebar:
         cfg = load_config(mk)
         st.toast(f"Switched to {REGISTRY[active].title}")
     st.caption(REGISTRY[active].description)
+    st.divider()
 
     trades_cached = load_last_trades(mk)
     if len(trades_cached):
         h = strategy_hint(trades_cached, cfg, names=names)
-        (st.warning if h.switch else st.info)(h.message)
+        st.markdown(f'<div style="font-size:0.75rem;color:{ui.MUTED};text-transform:uppercase;'
+                    f'letter-spacing:0.06em;margin-bottom:0.3rem">Strategy check</div>', unsafe_allow_html=True)
+        (st.warning if h.switch else st.caption)(h.message)
         if h.switch and h.recommended and st.button(f"Switch to {REGISTRY[h.recommended].title}"):
             set_active_strategy(h.recommended, mk)
             st.rerun()
     else:
         st.info("Run a backtest to get strategy-switch hints.")
 
-    compare = st.checkbox("Compare all strategies in scan", value=False)
-    auto = st.checkbox("Auto-refresh scan every 60s", value=False)
     st.divider()
+    compare = st.toggle("Show all strategies in the scan table", value=False)
+    auto = st.toggle("Auto-refresh every 60 s", value=False)
     st.caption("Educational tool, not financial advice. Always trade with a stop.")
 
 strategy = get_strategy(cfg["active_strategy"], cfg)
+_scan = st.session_state.get(f"scan_{mk.key}")
+st.markdown(ui.header(mk, prov.name, strategy.title,
+                      f"{_scan[2]:%H:%M} {mk.tz_label}" if _scan else None), unsafe_allow_html=True)
 tab_picks, tab_mine, tab_bt, tab_hint, tab_alerts, tab_guide = st.tabs(
-    ["🎯 Picks", "💼 My positions", "🧪 Backtest", "🔀 Switch hint", "🔔 Alerts & trades", "📘 Strategies"],
+    ["Picks", "My positions", "Backtest", "Switch hint", "Alerts", "Strategies"],
     key="main_tab")  # keyed so the selected tab survives reruns (form inputs, buttons)
 
 
@@ -194,41 +202,34 @@ def candle_chart(cand, sig=None, watch=None, title=""):
     df = df[(df.index.time >= start) & (df.index.time <= mk.close)]
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=df.index, open=df["open"], high=df["high"], low=df["low"],
-                                 close=df["close"], name=cand.symbol,
-                                 increasing_line_color="#26a69a", decreasing_line_color="#ef5350"))
-    fig.add_trace(go.Scatter(x=df.index, y=df["vwap"], name="VWAP", line=dict(color="#ab47bc", width=1.5)))
-    fig.add_trace(go.Scatter(x=df.index, y=df["ema9"], name="EMA 9", line=dict(color="#ffa726", width=1)))
+                                 close=df["close"], name="Price",
+                                 increasing=dict(line=dict(color=ui.GOOD, width=1), fillcolor=ui.GOOD),
+                                 decreasing=dict(line=dict(color=ui.BAD, width=1), fillcolor=ui.BAD)))
+    fig.add_trace(go.Scatter(x=df.index, y=df["vwap"], name="VWAP", line=dict(color=ui.SERIES[0], width=2)))
+    fig.add_trace(go.Scatter(x=df.index, y=df["ema9"], name="EMA 9", line=dict(color=ui.SERIES[1], width=2)))
     ctx = cand.ctx
-    lines = [(ctx.prev_close, "prev close", "#90a4ae")]
+    lines = [(ctx.prev_close, "Prev close", ui.MUTED, "dot")]
     if mk.premarket:
-        lines.append((ctx.premarket_high, "PM high", "#42a5f5"))
+        lines.append((ctx.premarket_high, "PM high", ui.SERIES[6], "dot"))
     if sig:
-        lines += [(sig.entry, "entry", "#26a69a"), (sig.stop, "stop", "#ef5350"), (sig.target, "target", "#66bb6a")]
-        fig.add_trace(go.Scatter(x=[sig.time], y=[sig.entry], mode="markers", name="signal",
-                                 marker=dict(symbol="triangle-up", size=14, color="#26a69a")))
+        lines += [(sig.entry, "Entry", ui.INK_2, "dash"), (sig.stop, "Stop", ui.BAD, "dash"),
+                  (sig.target, "Target", ui.GOOD, "dash")]
+        fig.add_trace(go.Scatter(x=[sig.time], y=[sig.entry], mode="markers", name="Signal",
+                                 marker=dict(symbol="triangle-up", size=12, color=ui.INK,
+                                             line=dict(color=ui.SURFACE, width=2))))
     if watch:
-        lines.append((watch[0], "trigger", "#ffee58"))
-    for y, label, color in lines:
+        lines.append((watch[0], "Trigger", ui.WARN, "dash"))
+    for y, label, color, dash in lines:
         if y and y == y:
-            fig.add_hline(y=y, line=dict(color=color, dash="dot", width=1),
+            fig.add_hline(y=y, line=dict(color=color, dash=dash, width=1),
                           annotation_text=f"{label} {y:.2f}", annotation_position="top left",
-                          annotation_font_color=color)
-    fig.update_layout(height=520, title=title, xaxis_rangeslider_visible=False,
-                      margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h"))
+                          annotation_font=dict(color=ui.INK_2, size=11))
+    ui.chart_layout(fig, height=480, title=title)
+    fig.update_layout(xaxis_rangeslider_visible=False)
     hi = mk.close.hour + mk.close.minute / 60
     lo = start.hour + start.minute / 60
     fig.update_xaxes(rangebreaks=[dict(bounds=[hi, lo], pattern="hour")])
     return fig
-
-
-STATUS_COLORS = {"BUY NOW": "background-color:#1b5e20;color:white",
-                 "SETTING UP": "background-color:#f9a825;color:black"}
-
-
-def style_status(v):
-    if isinstance(v, str) and v.startswith("triggered"):
-        return "background-color:#263238;color:#b0bec5"
-    return STATUS_COLORS.get(v, "")
 
 
 # ---------------- buyable now ---------------------------------------------
@@ -236,12 +237,13 @@ def buyable_section(df: pd.DataFrame) -> None:
     """Every setup that is buyable right now, across all strategies."""
     recent = strategy_hint(load_last_trades(mk), cfg, names=names).table
     b = buyable_now(df, strategy.name, recent)
-    st.subheader(f"✅ Buyable now - all strategies ({len(b)})")
+    st.markdown(ui.section("Buyable now", f"{len(b)} across all strategies"), unsafe_allow_html=True)
     if b.empty:
-        st.caption("Nothing is buyable right now: no setup has triggered and is still within "
-                   "0.5R of its entry with its trade open. "
-                   + ("The market is closed." if not mk.session_hours(mk.now().date()) or
-                      mk.now() >= mk.session_hours(mk.now().date())[1] else ""))
+        closed = ui.market_state(mk)[0] == "Closed"
+        st.markdown(ui.empty("Nothing is buyable right now"
+                             + (" - the market is closed." if closed else
+                                ". A setup shows here once it triggers, while its trade is open and price "
+                                "is within 0.5R of the entry.")), unsafe_allow_html=True)
         return
     min_t = int(cfg.get("switch_hint", {}).get("min_trades", 5))
 
@@ -251,32 +253,22 @@ def buyable_section(df: pd.DataFrame) -> None:
         return f"{r.strategy_R:+.2f}R ({r.strategy_trades})"
 
     show = pd.DataFrame({
-        "": ["⭐" if a else "" for a in b["active"]],
-        "symbol": b["symbol"],
-        "strategy": [REGISTRY[n].title for n in b["strategy"]],
-        "strategy lately": [lately(r) for r in b.itertuples()],
-        "triggered": b["triggered_at"],
-        "entry": b["entry"], "last": b["last"], "R past entry": b["r_from_entry"],
-        "stop": b["stop"], "target": b["target"], "shares": b["shares"],
-        "why": b["why"],
+        "Symbol": b["symbol"],
+        "Strategy": [REGISTRY[n].title + ("  (active)" if a else "") for n, a in zip(b["strategy"], b["active"])],
+        "Strategy lately": [lately(r) for r in b.itertuples()],
+        "Triggered": b["triggered_at"],
+        "Entry": b["entry"], "Last": b["last"], "Past entry": b["r_from_entry"],
+        "Stop": b["stop"], "Target": b["target"], "Shares": b["shares"],
+        "Setup": b["why"],
     })
-
-    def tone(v):
-        if isinstance(v, str) and v.startswith("-"):
-            return "color:#ef5350"
-        if isinstance(v, str) and v.startswith("+"):
-            return "color:#26a69a"
-        return ""
-
     money = st.column_config.NumberColumn(format="%.2f")
-    st.dataframe(show.style.map(tone, subset=["strategy lately"]), width="stretch", hide_index=True,
-                 column_config={"entry": money, "last": money, "stop": money, "target": money,
-                                "R past entry": st.column_config.NumberColumn(format="%+.2f"),
-                                "shares": st.column_config.NumberColumn(format="%d")})
-    st.caption(f"⭐ = your active strategy ({strategy.title}), the only one the monitor alerts on. "
-               "'Strategy lately' is that strategy's average R per trade over recent sessions "
-               "(trades in brackets) - red means it has been losing money. "
-               "Educational tool, not financial advice.")
+    st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately"]), width="stretch", hide_index=True,
+                 column_config={"Entry": money, "Last": money, "Stop": money, "Target": money,
+                                "Past entry": st.column_config.NumberColumn(format="%+.2fR"),
+                                "Shares": st.column_config.NumberColumn(format="%d"),
+                                "Setup": st.column_config.TextColumn(width="large")})
+    st.caption(f"Only your active strategy ({strategy.title}) sends alerts. 'Strategy lately' is its average "
+               "R per trade over recent sessions (trades in brackets); red means it has been losing money.")
 
 
 # ---------------- picks ---------------------------------------------------
@@ -284,7 +276,7 @@ def buyable_section(df: pd.DataFrame) -> None:
 def picks():
     strats = all_strategies(cfg)  # always analyse all: cheap once bars are fetched
     key = f"scan_{mk.key}"
-    if st.button("🔄 Scan now", type="primary") or key not in st.session_state or auto:
+    if st.button("Scan now", type="primary", icon=":material/refresh:") or key not in st.session_state or auto:
         with st.spinner("Scanning movers..."):
             logs = []
             df, cands = scan(prov, cfg, strats, log=logs.append)
@@ -293,29 +285,41 @@ def picks():
 
             remember_buyable(mk, buyable_now(df, strategy.name))
     df, cands, ts, logs = st.session_state[key]
-    st.caption(f"{mk.flag} Last scan {ts:%H:%M:%S} {mk.tz_label} - {logs[0] if logs else ''}")
+    st.caption(f"Scanned {ts:%H:%M:%S} {mk.tz_label} · {logs[0] if logs else ''}")
     if df.empty:
-        st.info("No stocks pass the universe filters right now (price / gap / relative volume / float).")
+        st.markdown(ui.empty("No stocks pass the filters right now (price, size of move, relative volume)."),
+                    unsafe_allow_html=True)
         return
     view = df if compare else df[df["strategy"] == strategy.name]
     buyable_section(df)
-    st.subheader(f"{strategy.title} scan" if not compare else "All strategies")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Candidates", view["symbol"].nunique())
-    c2.metric("BUY NOW", int((view["status"] == "BUY NOW").sum()))
-    c3.metric("Setting up", int((view["status"] == "SETTING UP").sum()))
-    c4.metric("Triggered today", int(view["status"].str.startswith("triggered").sum()))
-    cols = ["symbol", "strategy", "status", "score", "last", "gap_%", "day_%", "rel_vol", "float_M",
-            "entry", "stop", "target", "shares", "why"]
+    st.markdown(ui.section(f"{strategy.title} scan" if not compare else "All strategies",
+                           f"{view['symbol'].nunique()} candidates"), unsafe_allow_html=True)
+    st.markdown(ui.tiles([
+        ("Buy now", str(int((view["status"] == "BUY NOW").sum())), strategy.title if not compare else "all strategies"),
+        ("Setting up", str(int((view["status"] == "SETTING UP").sum())), "within 5% of trigger"),
+        ("Triggered today", str(int(view["status"].str.startswith("triggered").sum())), "no longer buyable"),
+        ("Candidates", str(view["symbol"].nunique()), "passed the filters"),
+    ]), unsafe_allow_html=True)
+    table = view.rename(columns={"symbol": "Symbol", "status": "Status", "last": "Last", "gap_%": "Gap",
+                                 "day_%": "Day", "rel_vol": "Rel vol", "float_M": "Float (M)", "entry": "Entry",
+                                 "stop": "Stop", "target": "Target", "shares": "Shares", "why": "Setup"})
+    table["Strategy"] = [REGISTRY[n].title for n in view["strategy"]]
+    cols = ["Symbol", "Strategy", "Status", "Last", "Gap", "Day", "Rel vol"] + \
+        (["Float (M)"] if mk.key == "us" else []) + ["Entry", "Stop", "Target", "Shares", "Setup"]
+    if not compare:
+        cols.remove("Strategy")
     money = st.column_config.NumberColumn(format="%.2f")
-    pct = st.column_config.NumberColumn(format="%.1f")
-    st.dataframe(view[cols].style.map(style_status, subset=["status"]),
-                 width="stretch", hide_index=True, height=min(600, 40 + 35 * len(view)),
-                 column_config={"score": pct, "last": money, "gap_%": pct, "day_%": pct, "rel_vol": pct,
-                                "float_M": pct, "entry": money, "stop": money, "target": money,
-                                "shares": st.column_config.NumberColumn(format="%d")})
+    pct = st.column_config.NumberColumn(format="%+.1f%%")
+    styled = ui.dash_fill(table[cols], money=["Entry", "Stop", "Target"], whole=["Shares"]).style \
+        .map(ui.status_cell, subset=["Status"]).map(ui.signed_cell, subset=["Day"])
+    st.dataframe(styled,
+                 width="stretch", hide_index=True, height=min(560, 38 + 35 * len(view)),
+                 column_config={"Last": money, "Gap": pct, "Day": pct,
+                                "Rel vol": st.column_config.NumberColumn(format="%.1fx"),
+                                "Float (M)": st.column_config.NumberColumn(format="%.1f"),
+                                "Setup": st.column_config.TextColumn(width="large")})
 
-    st.subheader("Chart")
+    st.markdown(ui.section("Chart"), unsafe_allow_html=True)
     syms = list(dict.fromkeys(view["symbol"]))
     pick = st.selectbox("Symbol", syms, key=f"chart_sym_{mk.key}")
     cand = next((c for c in cands if c.symbol == pick), None)
@@ -325,8 +329,8 @@ def picks():
                          format_func=lambda n: REGISTRY[n].title) if compare else strategy.name
     a = cand.results.get(sname, {})
     st.plotly_chart(candle_chart(cand, a.get("signal"), a.get("watch"),
-                                 f"{pick} - {REGISTRY[sname].title}: {a.get('status', '')}"),
-                    width="stretch")
+                                 f"{pick} · {REGISTRY[sname].title} · {a.get('status', '')}"),
+                    width="stretch", config={"displaylogo": False, "modeBarButtonsToRemove": ["lasso2d", "select2d"]})
 
 
 ADVICE = my_advice()  # once per page load: evaluating fetches prices
@@ -334,8 +338,9 @@ ADVICE = my_advice()  # once per page load: evaluating fetches prices
 with tab_picks:
     _sell = [(r, a) for r, a in ADVICE if a.action == "SELL NOW"]
     if _sell:
-        st.error("**Sell now:** " + "; ".join(f"{r['shares']} {r['symbol']} - {a.reason}" for r, a in _sell)
-                 + ". Record the sale in *My positions*.")
+        st.markdown(ui.banner("<b>Sell now</b> · " + "; ".join(
+            f"{r['shares']} {r['symbol']} - {a.reason}" for r, a in _sell) + ". Record the sale in My positions."),
+            unsafe_allow_html=True)
     picks()
 
 # ---------------- my positions --------------------------------------------
@@ -346,26 +351,30 @@ with tab_mine:
 
     cur = mk.currency
     advice = ADVICE
-    st.subheader(f"Open positions ({len(advice)})")
+    st.markdown(ui.section("Open positions", str(len(advice))), unsafe_allow_html=True)
     if advice:
+        live_pnl = sum(a.pnl or 0 for _, a in advice)
+        st.markdown(ui.tiles([
+            ("Open P&L", mk.fmt_money(live_pnl), "unrealized"),
+            ("To sell", str(sum(a.action == "SELL NOW" for _, a in advice)), "exit rule triggered"),
+            ("Holding", str(sum(a.action == "HOLD" for _, a in advice)), None),
+        ]), unsafe_allow_html=True)
         st.dataframe(pd.DataFrame([{
-            "action": a.action, "symbol": r["symbol"], "shares": r["shares"], "bought": r["entry"],
-            "at": r["entry_time"][11:16], "last": a.last, "P&L": a.pnl, "R": a.r_now,
-            "stop now": a.stop, "target": r["target"], "why": a.reason,
-            "strategy": REGISTRY[r["strategy"]].title if r["strategy"] in REGISTRY else r["strategy"],
-        } for r, a in advice]).style.map(
-            lambda v: {"SELL NOW": "background-color:#b71c1c;color:white",
-                       "HOLD": "background-color:#1b5e20;color:white"}.get(v, ""), subset=["action"]),
+            "Action": a.action, "Symbol": r["symbol"], "Shares": r["shares"], "Bought": r["entry"],
+            "At": r["entry_time"][11:16], "Last": a.last, "P&L": a.pnl, "R": a.r_now,
+            "Stop now": a.stop, "Target": r["target"], "Why": a.reason,
+            "Strategy": REGISTRY[r["strategy"]].title if r["strategy"] in REGISTRY else "Manual",
+        } for r, a in advice]).style.map(ui.action_cell, subset=["Action"]).map(ui.signed_cell, subset=["P&L", "R"]),
             width="stretch", hide_index=True,
             column_config={k: st.column_config.NumberColumn(format="%.2f")
-                           for k in ("bought", "last", "P&L", "stop now", "target")}
+                           for k in ("Bought", "Last", "P&L", "Stop now", "Target")}
             | {"R": st.column_config.NumberColumn(format="%+.2f")})
         st.caption("Exit rules (same as the backtest): stop; target; stop moves to your entry at +1R; after "
                    "+1R sell on a 1-min close below the 9 EMA; flat by "
                    f"{cfg.get('exits', {}).get('time_exit')}. The monitor pushes a SELL alert when one triggers.")
         for r, a in advice:
-            with st.expander(f"{'🔴' if a.action == 'SELL NOW' else '🟢'} {r['symbol']} - {r['shares']} sh @ "
-                             f"{r['entry']:.2f} - {a.action}"):
+            with st.expander(f"{a.action} · {r['symbol']} · {r['shares']} sh @ {r['entry']:.2f}",
+                             icon=":material/sell:" if a.action == "SELL NOW" else ":material/trending_up:"):
                 c1, c2 = st.columns(2)
                 with c1:
                     px = st.number_input("Sold at", value=float(a.last or r["entry"]), step=0.05,
@@ -386,9 +395,10 @@ with tab_mine:
                         delete_position(mk, r["id"])
                         st.rerun()
     else:
-        st.caption("No open positions. Record a buy below and the tool will tell you when to sell.")
+        st.markdown(ui.empty("No open positions. Record a buy below and the tool will tell you when to sell."),
+                    unsafe_allow_html=True)
 
-    st.subheader("Record a buy")
+    st.markdown(ui.section("Record a buy"), unsafe_allow_html=True)
     from dtrader.portfolio import recent_buyable, setup_key
 
     scan_df = st.session_state.get(f"scan_{mk.key}", (pd.DataFrame(),))[0]
@@ -459,14 +469,18 @@ with tab_mine:
             st.error(str(e))
 
     closed = load_closed(mk)
-    st.subheader(f"Closed trades ({len(closed)})")
+    st.markdown(ui.section("Closed trades", str(len(closed))), unsafe_allow_html=True)
     if len(closed):
-        st.dataframe(closed[["symbol", "shares", "entry", "exit", "entry_time", "exit_time", "r_multiple", "pnl",
-                             "exit_reason"]].iloc[::-1], width="stretch", hide_index=True)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Realized P&L", mk.fmt_money(closed["pnl"].sum()))
-        c2.metric("Win rate", f"{(closed['pnl'] > 0).mean() * 100:.0f}%")
-        c3.metric("Average R", f"{closed['r_multiple'].mean():+.2f}")
+        st.markdown(ui.tiles([
+            ("Realized P&L", mk.fmt_money(closed["pnl"].sum()), None),
+            ("Win rate", f"{(closed['pnl'] > 0).mean() * 100:.0f}%", f"{len(closed)} trades"),
+            ("Average R", f"{closed['r_multiple'].mean():+.2f}", None),
+        ]), unsafe_allow_html=True)
+        ct = closed.rename(columns={"symbol": "Symbol", "shares": "Shares", "entry": "Bought", "exit": "Sold",
+                                    "entry_time": "In", "exit_time": "Out", "r_multiple": "R", "pnl": "P&L",
+                                    "exit_reason": "Reason"})
+        st.dataframe(ct[["Symbol", "Shares", "Bought", "Sold", "In", "Out", "R", "P&L", "Reason"]].iloc[::-1]
+                     .style.map(ui.signed_cell, subset=["R", "P&L"]), width="stretch", hide_index=True)
 
 # ---------------- backtest ------------------------------------------------
 with tab_bt:
@@ -486,38 +500,65 @@ with tab_bt:
         st.rerun()
     trades = st.session_state.get(f"bt_{mk.key}", load_last_trades(mk))
     if len(trades):
-        st.dataframe(summarize(trades, names), width="stretch")
+        summ = summarize(trades, names)
+        summ.index = [REGISTRY[n].title for n in summ.index]
+        summ = summ.rename(columns={"trades": "Trades", "win_rate_%": "Win %", "avg_R": "Avg R",
+                                    "total_R": "Total R", "profit_factor": "Profit factor",
+                                    "max_dd_R": "Max drawdown (R)", "pnl": "P&L", "days_traded": "Days"})
+        st.dataframe(summ.sort_values("Avg R", ascending=False).style.map(ui.signed_cell, subset=["Avg R", "Total R"]),
+                     width="stretch",
+                     column_config={"Avg R": st.column_config.NumberColumn(format="%+.3f"),
+                                    "Total R": st.column_config.NumberColumn(format="%+.1f"),
+                                    "Win %": st.column_config.NumberColumn(format="%.0f%%"),
+                                    "Profit factor": st.column_config.NumberColumn(format="%.2f"),
+                                    "Max drawdown (R)": st.column_config.NumberColumn(format="%.1f"),
+                                    "P&L": st.column_config.NumberColumn(format="%,.0f")})
+        # Equity curves: active strategy + the 3 best by total R (more lines stop being readable).
+        totals = trades.groupby("strategy")["r"].sum().sort_values(ascending=False)
+        default = list(dict.fromkeys([strategy.name] + list(totals.index[:3])))
+        chosen = st.multiselect("Equity curves", names, default=[n for n in default if n in totals.index],
+                                format_func=lambda n: REGISTRY[n].title, max_selections=4)
         fig = go.Figure()
-        for n in names:
+        for n in chosen:
             t = trades[trades["strategy"] == n].sort_values("entry_time")
-            if len(t):
-                fig.add_trace(go.Scatter(x=list(range(1, len(t) + 1)), y=t["r"].cumsum(), name=REGISTRY[n].title,
-                                         mode="lines+markers"))
-        fig.update_layout(title="Cumulative R by trade", xaxis_title="trade #", yaxis_title="R",
-                          height=380, margin=dict(l=10, r=10, t=40, b=10))
-        st.plotly_chart(fig, width="stretch")
-        f = st.multiselect("Filter strategy", names, default=[])
+            color = ui.SERIES[names.index(n)] if names.index(n) < len(ui.SERIES) else ui.MUTED
+            fig.add_trace(go.Scatter(x=list(range(1, len(t) + 1)), y=t["r"].cumsum(), name=REGISTRY[n].title,
+                                     mode="lines", line=dict(color=color, width=2),
+                                     hovertemplate="trade %{x}: %{y:+.1f}R<extra>" + REGISTRY[n].title + "</extra>"))
+        fig.add_hline(y=0, line=dict(color=ui.AXIS, width=1))
+        ui.chart_layout(fig, height=360, title="Cumulative R by trade")
+        fig.update_layout(hovermode="closest")
+        st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
+        f = st.multiselect("Trades for", names, default=[], format_func=lambda n: REGISTRY[n].title)
         show = trades[trades["strategy"].isin(f)] if f else trades
         st.dataframe(show.sort_values("entry_time", ascending=False), width="stretch", hide_index=True)
         st.caption("Backtests use symbols that gapped at the open (or ran 20%+ the day before) from your "
                    "scan history, watchlist and current movers. Small sample + survivorship bias: use it to "
                    "compare strategies, not to forecast returns.")
     else:
-        st.info("No backtest yet. Click **Run backtest**.")
+        st.markdown(ui.empty("No backtest yet. Press Run backtest."), unsafe_allow_html=True)
 
 # ---------------- hint ----------------------------------------------------
 with tab_hint:
     t = st.session_state.get(f"bt_{mk.key}", load_last_trades(mk))
     h = strategy_hint(t, cfg, names=names)
     (st.warning if h.switch else st.success)(h.message)
-    st.dataframe(h.table, width="stretch")
+    ht = h.table.copy()
+    ht.index = [REGISTRY[n].title if n in REGISTRY else n for n in ht.index]
+    ht = ht.rename(columns={"trades": "Trades", "live_trades": "Live", "expectancy_R": "Avg R",
+                            "last5_avg_R": "Last 5 avg R", "win_rate_%": "Win %", "profit_factor": "Profit factor"})
+    st.dataframe(ht.sort_values("Avg R", ascending=False).style.map(ui.signed_cell, subset=["Avg R", "Last 5 avg R"]),
+                 width="stretch", column_config={"Avg R": st.column_config.NumberColumn(format="%+.2f"),
+                                                 "Last 5 avg R": st.column_config.NumberColumn(format="%+.2f"),
+                                                 "Win %": st.column_config.NumberColumn(format="%.0f%%"),
+                                                 "Profit factor": st.column_config.NumberColumn(format="%.2f")})
     if h.switch and h.recommended:
         if st.button(f"Apply: switch to {REGISTRY[h.recommended].title}", key="apply_hint"):
             set_active_strategy(h.recommended, mk)
             st.rerun()
     sh = cfg.get("switch_hint", {})
     st.caption(f"Judged on the last {sh.get('lookback_days', 10)} sessions; a strategy needs "
-               f"{sh.get('min_trades', 5)}+ trades. Live trades from the alert journal count double. "
+               f"{sh.get('min_trades', 10)}+ trades. Live trades from the alert journal count double. "
                "Edit `switch_hint` in config.yaml to tune.")
 
 # ---------------- alerts --------------------------------------------------
@@ -526,18 +567,18 @@ with tab_alerts:
                 "automatically (`./scripts/autostart.sh status`). To run it by hand:")
     st.code("./run.sh monitor" if mk.key == "us" else f"./run.sh --market {mk.key} monitor", language="bash")
     pos = load_state(mk).get("positions", [])
-    st.subheader(f"Open tracked trades ({len(pos)})")
+    st.markdown(ui.section("Paper trades from alerts", str(len(pos))), unsafe_allow_html=True)
     if pos:
         st.dataframe(pd.DataFrame(pos)[["symbol", "strategy", "entry_time", "entry", "stop", "target", "shares"]],
                      width="stretch", hide_index=True)
     al = load_alerts(market=mk)
-    st.subheader("Alert log")
+    st.markdown(ui.section("Alert log"), unsafe_allow_html=True)
     if len(al):
         st.dataframe(al.iloc[::-1], width="stretch", hide_index=True)
     else:
         st.caption("No alerts yet.")
     j = load_journal(mk)
-    st.subheader("Closed trades (journal)")
+    st.markdown(ui.section("Closed paper trades"), unsafe_allow_html=True)
     if len(j):
         st.dataframe(j[["day", "symbol", "strategy", "entry", "exit_price", "exit_reason", "r", "shares"]].iloc[::-1],
                      width="stretch", hide_index=True)
@@ -547,10 +588,17 @@ with tab_alerts:
 
 # ---------------- guide ---------------------------------------------------
 with tab_guide:
-    for n, cls in REGISTRY.items():
-        st.markdown(f"### {'⭐ ' if n == cfg['active_strategy'] else ''}{cls.title}  `{n}`")
-        st.markdown(f"*{cls.style}*: {cls.description}")
-        st.json({**cls.defaults, **((cfg.get('strategies') or {}).get(n) or {})}, expanded=False)
+    cols = st.columns(2)
+    for k, (n, cls) in enumerate(REGISTRY.items()):
+        with cols[k % 2].container(border=True):
+            badge = ui.pill("Active", ui.ACCENT) if n == cfg["active_strategy"] else ""
+            st.markdown(f'<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">'
+                        f'<span style="font-weight:600;color:{ui.INK}">{cls.title}</span>{badge}</div>'
+                        f'<div style="font-size:0.75rem;color:{ui.MUTED};margin:0.15rem 0 0.4rem">'
+                        f'{cls.style} · <code>{n}</code></div>', unsafe_allow_html=True)
+            st.caption(cls.description)
+            with st.popover("Parameters"):
+                st.json({**cls.defaults, **((cfg.get('strategies') or {}).get(n) or {})})
     ex = cfg.get("exits", {})
     st.markdown(
         f"**Exits (all strategies):** stop loss; target at {cfg.get('risk', {}).get('reward_risk', 2)}R; "
