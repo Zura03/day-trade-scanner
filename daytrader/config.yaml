@@ -38,6 +38,14 @@ risk:
   max_position_pct: 25        # never size above this % of account
   reward_risk: 2.0            # default profit target = entry + R * risk
 
+# --- Daily risk limits (your recorded positions, not paper trades) ----
+# When one is hit, BUY alerts stop for the rest of the day (sell alerts keep
+# working) and the dashboard shows why.
+risk_limits:
+  max_daily_loss: 300         # today's realized + open P&L, in account currency
+  max_trades_per_day: 4       # buys you record today
+  max_open_positions: 3       # positions open at the same time
+
 # --- Exits shared by all strategies -----------------------------------
 exits:
   trail_after_r: 1.0          # once +1R, trail stop under 9 EMA (1-min)
@@ -118,6 +126,9 @@ india:
     max_float_millions: null
     max_candidates: 30
     watchlist: []
+
+  risk_limits:
+    max_daily_loss: 7500      # rupees (3 x risk_per_trade)
 
   risk:
     account_size: 500000

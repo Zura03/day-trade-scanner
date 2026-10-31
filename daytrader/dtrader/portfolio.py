@@ -199,3 +199,65 @@ def recent_buyable(market: str | Market, minutes: int = 60) -> dict[str, dict]:
     cutoff = m.now() - pd.Timedelta(minutes=minutes)
     keep = {k: v for k, v in day.items() if datetime.fromisoformat(v["last_seen"]) >= cutoff}
     return dict(sorted(keep.items(), key=lambda kv: kv[1]["last_seen"], reverse=True))
+
+
+# ---- daily risk limits --------------------------------------------------------
+@dataclass
+class RiskStatus:
+    realized: float
+    unrealized: float
+    trades_today: int
+    open_count: int
+    max_daily_loss: float
+    max_trades: int
+    max_open: int
+    breaches: list
+
+    @property
+    def pnl_today(self) -> float:
+        return self.realized + self.unrealized
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.breaches)
+
+    @property
+    def loss_left(self) -> float:
+        return max(self.max_daily_loss + self.pnl_today, 0.0)
+
+
+def risk_status(market: str | Market, provider, cfg: dict, advice: list | None = None) -> RiskStatus:
+    """Today's P&L, trade count and open positions against config `risk_limits`.
+    `advice` = [(row, Advice)] if already evaluated (saves refetching prices)."""
+    m = get_market(market)
+    lim = cfg.get("risk_limits", {})
+    max_loss = float(lim.get("max_daily_loss", 0) or 0)
+    max_trades = int(lim.get("max_trades_per_day", 0) or 0)
+    max_open = int(lim.get("max_open_positions", 0) or 0)
+    today = m.now().date().isoformat()
+
+    open_rows = load_positions(m)
+    if advice is None:
+        advice = []
+        for r in open_rows:
+            try:
+                advice.append((r, evaluate(r, provider, cfg)))
+            except Exception:
+                advice.append((r, None))
+    unrealized = sum((a.pnl or 0) for _, a in advice if a is not None)
+    closed = load_closed(m)
+    closed_today = closed[closed["exit_time"].astype(str).str.startswith(today)] if len(closed) else closed
+    realized = float(closed_today["pnl"].sum()) if len(closed_today) else 0.0
+    bought_today = sum(r["entry_time"].startswith(today) for r in open_rows)
+    if len(closed):
+        bought_today += int(closed["entry_time"].astype(str).str.startswith(today).sum())
+
+    breaches = []
+    pnl = realized + unrealized
+    if max_loss and pnl <= -max_loss:
+        breaches.append(f"daily loss limit hit ({m.fmt_money(pnl)} of -{m.currency}{max_loss:,.0f})")
+    if max_trades and bought_today >= max_trades:
+        breaches.append(f"{bought_today} of {max_trades} trades used today")
+    if max_open and len(open_rows) >= max_open:
+        breaches.append(f"{len(open_rows)} of {max_open} positions already open")
+    return RiskStatus(realized, unrealized, bought_today, len(open_rows), max_loss, max_trades, max_open, breaches)

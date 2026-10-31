@@ -125,6 +125,8 @@ class Monitor:
             notify("INFO", "Strategy switched", f"Now scanning with {self.strategy.title}", self.cfg)
 
         day = session_day(self.p)
+        mine = self._evaluate_mine()
+        self._risk_check(day, mine)
         if _time.time() - self.last_universe > 300 or not self.cands:
             self.cands = gather_candidates(self.p, self.cfg, day, log=lambda *_: None)
             self.last_universe = _time.time()
@@ -138,27 +140,48 @@ class Monitor:
         for c in self.cands:
             a = analyse(self.strategy, c)
             s = a["signal"]
-            if a["status"] == "BUY NOW" and s and not self._seen(f"buy|{s.symbol}|{s.strategy}|{s.time}"):
+            blocked = getattr(self, "risk", None) is not None and self.risk.blocked
+            if a["status"] == "BUY NOW" and s and not blocked and not self._seen(f"buy|{s.symbol}|{s.strategy}|{s.time}"):
                 self._open(s, c.last, day, c)
             elif a["status"] == "SETTING UP" and a["watch"] and not self._seen(f"watch|{c.symbol}|{day}|{self.strategy.name}"):
                 notify("WATCH", f"{c.symbol} near trigger {a['watch'][0]:.2f}",
                        f"last {c.last:.2f}, {a['watch'][1]} ({self.strategy.title})", self.cfg)
 
         self._manage_positions(day)
-        self._check_my_positions()
+        self._check_my_positions(mine)
         self._save()
 
-    def _check_my_positions(self) -> None:
-        """Your real positions (recorded via dashboard/CLI): push SELL when an
-        exit triggers, and INFO when the stop moves. Read-only on the file."""
+    def _evaluate_mine(self) -> list:
+        """[(row, Advice)] for your recorded positions (read-only on the file)."""
         from .portfolio import evaluate, load_positions
 
+        out = []
         for row in load_positions(self.m):
             try:
-                adv = evaluate(row, self.p, self.cfg)
+                out.append((row, evaluate(row, self.p, self.cfg)))
             except Exception as e:
                 print(f"position check {row['symbol']}: {e}", file=sys.stderr, flush=True)
-                continue
+        return out
+
+    def _risk_check(self, day, mine: list) -> None:
+        """Daily risk limits: while one is hit, no BUY alerts (one push per reason per day)."""
+        from .portfolio import risk_status
+
+        try:
+            self.risk = risk_status(self.m, self.p, self.cfg, advice=mine)
+        except Exception as e:
+            print(f"risk check: {e}", file=sys.stderr, flush=True)
+            self.risk = None
+            return
+        for b in self.risk.breaches:
+            kind = "loss" if "loss" in b else "trades" if "trades" in b else "open"
+            if not self._seen(f"risk|{day}|{kind}"):
+                notify("INFO", "Risk limit reached - BUY alerts paused",
+                       f"{b}. Sell alerts for your positions keep working.", self.cfg)
+
+    def _check_my_positions(self, mine: list) -> None:
+        """Your real positions: push SELL when an exit triggers, INFO when the stop moves."""
+        for row, adv in mine:
             for note in adv.notes:
                 if not self._seen(f"mine|{row['id']}|{note}"):
                     notify("INFO", f"Your {row['symbol']}: {note}", f"stop now {adv.stop:.2f}", self.cfg)
@@ -169,6 +192,8 @@ class Monitor:
                        "Record the sale in the dashboard (My positions).", self.cfg)
 
     def _open(self, s, last: float, day, cand=None) -> None:
+        if getattr(self, "risk", None) is not None and self.risk.blocked:
+            return  # daily risk limit hit: no new BUY alerts (see _risk_check)
         """BUY alert + tracked position, with the backtest's rules: one open
         position per symbol, max trades per symbol per day, and a fill at the
         current price (skip if it has already run more than MAX_CHASE_R past the trigger)."""

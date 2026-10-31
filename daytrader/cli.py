@@ -203,6 +203,18 @@ def cmd_positions(cfg, args):
               f"avg {closed['r_multiple'].mean():+.2f}R")
 
 
+def cmd_risk(cfg, args):
+    from dtrader.portfolio import risk_status
+
+    m = cfg["market"]
+    r = risk_status(m, provider(cfg, args), cfg)
+    print(f"P&L today      {m.fmt_money(r.pnl_today)}  (realized {m.fmt_money(r.realized)}, open {m.fmt_money(r.unrealized)})"
+          + (f"  limit -{m.currency}{r.max_daily_loss:,.0f}, {m.currency}{r.loss_left:,.0f} left" if r.max_daily_loss else ""))
+    print(f"Trades today   {r.trades_today}" + (f" / {r.max_trades}" if r.max_trades else ""))
+    print(f"Open positions {r.open_count}" + (f" / {r.max_open}" if r.max_open else ""))
+    print("Status         " + ("PAUSED - " + "; ".join(r.breaches) if r.blocked else "OK - within limits"))
+
+
 def cmd_sell(cfg, args):
     from dtrader.portfolio import load_positions, record_sell
 
@@ -277,13 +289,14 @@ def main():
     s.add_argument("--stop", type=float, help="default 2%% below price")
     s.add_argument("--target", type=float, help="default 2R above price"); s.add_argument("--strategy")
     sub.add_parser("positions", help="your open positions: HOLD or SELL NOW")
+    sub.add_parser("risk", help="today's P&L, trades and open positions vs your daily limits")
     s = sub.add_parser("sell", help="record that you sold a position")
     s.add_argument("id_or_symbol"); s.add_argument("price", type=float)
     args = ap.parse_args()
     cfg = load_config(args.market)
     {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest,
      "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth, "buy": cmd_buy,
-     "positions": cmd_positions, "sell": cmd_sell}[args.cmd](cfg, args)
+     "positions": cmd_positions, "sell": cmd_sell, "risk": cmd_risk}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

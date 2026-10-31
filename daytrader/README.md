@@ -275,6 +275,27 @@ shows realized P&L, win rate and average R. `./run.sh positions` prints
 everything in the terminal. Your positions are stored in
 `data/[india/]my_positions.json`, and closed trades in `my_trades.jsonl`.
 
+## Daily risk limits
+
+These are set in `risk_limits` in `config.yaml`, per market, and apply to the
+positions **you record**, not to the monitor's paper trades.
+
+| Limit | US default | India default |
+|---|---|---|
+| `max_daily_loss`: today's realized + open P&L | $300 | ₹7,500 |
+| `max_trades_per_day`: buys recorded today | 4 | 4 |
+| `max_open_positions`: open at the same time | 3 | 3 |
+
+When a limit is reached, the monitor stops sending BUY alerts and pushes
+"Risk limit reached - BUY alerts paused" once with the reason. Sell alerts for
+your positions keep working. The dashboard shows an amber notice on Picks, a
+"Today's limits" row on My positions, and a warning in the buy form. You can
+still record a buy you've already made. BUY alerts resume by themselves if
+the limit lifts, for example after you close a position.
+
+`./run.sh risk` (add `--market india` for NSE) prints today's status. Set a
+limit to 0 to turn it off.
+
 ## Setup odds (in Buyable now and BUY alerts)
 
 Every buyable setup gets three extra readings, inspired by the "Time Machine"

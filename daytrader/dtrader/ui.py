@@ -180,6 +180,12 @@ def banner(html_text: str) -> str:
     return f'<div class="dt-banner">{html_text}</div>'
 
 
+def notice(html_text: str) -> str:
+    """Amber notice (state, not error): e.g. BUY alerts paused by a risk limit."""
+    return (f'<div class="dt-banner" style="border-color:{WARN};background:rgba(250,178,25,0.08)">'
+            f'{html_text}</div>')
+
+
 def chart_layout(fig, height: int = 460, title: str | None = None):
     """Recessive chrome: surface background, hairline grid, muted axes."""
     fig.update_layout(

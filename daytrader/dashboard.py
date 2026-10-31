@@ -354,6 +354,9 @@ def picks():
 
 
 ADVICE = my_advice()  # once per page load: evaluating fetches prices
+from dtrader.portfolio import risk_status  # noqa: E402
+
+RISK = risk_status(mk, prov, cfg, advice=ADVICE)
 
 with tab_picks:
     _sell = [(r, a) for r, a in ADVICE if a.action == "SELL NOW"]
@@ -361,6 +364,10 @@ with tab_picks:
         st.markdown(ui.banner("<b>Sell now</b> · " + "; ".join(
             f"{r['shares']} {r['symbol']} - {a.reason}" for r, a in _sell) + ". Record the sale in My positions."),
             unsafe_allow_html=True)
+    if RISK.blocked:
+        st.markdown(ui.notice("<b>BUY alerts paused for today</b> · " + "; ".join(RISK.breaches)
+                              + ". Sell alerts keep working. Limits: <code>risk_limits</code> in config.yaml."),
+                    unsafe_allow_html=True)
     picks()
 
 # ---------------- my positions --------------------------------------------
@@ -371,6 +378,15 @@ with tab_mine:
 
     cur = mk.currency
     advice = ADVICE
+    st.markdown(ui.section("Today's limits", "BUY alerts pause when one is reached"), unsafe_allow_html=True)
+    st.markdown(ui.tiles([
+        ("P&L today", mk.fmt_money(RISK.pnl_today),
+         f"limit -{cur}{RISK.max_daily_loss:,.0f} · {cur}{RISK.loss_left:,.0f} left" if RISK.max_daily_loss else "no limit"),
+        ("Trades today", f"{RISK.trades_today} / {RISK.max_trades}" if RISK.max_trades else str(RISK.trades_today),
+         "buys recorded today"),
+        ("Open positions", f"{RISK.open_count} / {RISK.max_open}" if RISK.max_open else str(RISK.open_count), None),
+        ("Status", "Paused" if RISK.blocked else "OK", RISK.breaches[0] if RISK.breaches else "within limits"),
+    ]), unsafe_allow_html=True)
     st.markdown(ui.section("Open positions", str(len(advice))), unsafe_allow_html=True)
     if advice:
         live_pnl = sum(a.pnl or 0 for _, a in advice)
@@ -419,6 +435,9 @@ with tab_mine:
                     unsafe_allow_html=True)
 
     st.markdown(ui.section("Record a buy"), unsafe_allow_html=True)
+    if RISK.blocked:
+        st.warning("A daily risk limit is reached (" + "; ".join(RISK.breaches) + "). You can still record a "
+                   "buy you've already made, but the plan says no new trades today.")
     from dtrader.portfolio import recent_buyable, setup_key
 
     scan_df = st.session_state.get(f"scan_{mk.key}", (pd.DataFrame(),))[0]
