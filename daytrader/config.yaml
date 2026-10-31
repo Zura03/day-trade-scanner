@@ -68,7 +68,7 @@ strategies:
 # --- Strategy-switch hint ---------------------------------------------
 switch_hint:
   lookback_days: 10           # rolling window used to judge strategies
-  min_trades: 5               # need at least this many trades to judge
+  min_trades: 10              # need at least this many trades to judge (13 strategies: avoid lucky streaks)
   # Suggest switching when the active strategy's expectancy (avg R per
   # trade) trails the best one by this much, or goes negative.
   margin_r: 0.15

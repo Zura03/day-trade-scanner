@@ -312,7 +312,7 @@ automatic refresh but switch by hand, set `auto_switch: false`. To turn the
 morning refresh off entirely, set `refresh_before_session: false`.
 
 Small samples can make auto-switching flip back and forth on noise. A
-strategy needs `min_trades` (5) trades in the window to be judged, and must
+strategy needs `min_trades` (10) trades in the window to be judged, and must
 beat the active one by `margin_r` (0.15R). Raise those for steadier
 switching, especially for India, where there are fewer gappers per day.
 
