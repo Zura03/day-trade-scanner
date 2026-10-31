@@ -1,72 +1,101 @@
 # Day Trade Scanner
 
-A day-trading scanner for **US small caps** and **Indian NSE F&O stocks**. It
-finds stocks worth day trading, ranks them for the strategy you pick, gives entry / stop / target / share size, and sends
-BUY and SELL alerts. A market-wide backtester scores every strategy on recent
-sessions and tells you when to switch.
+A day-trading assistant for **US small caps** and **Indian NSE F&O stocks**.
+It scans the day's movers, finds setups for 13 switchable strategies, and tells
+you what's buyable right now, with entry, stop, target and share size. It
+sends BUY and SELL alerts to your phone and tracks the shares you buy until
+it's time to sell. Every morning it re-runs a market-wide backtest and
+switches to the strategy that has been working best.
 
-> Educational tool, not financial advice. It never places orders.
+> Educational tool, not financial advice. It never places orders: you trade in
+> your own broker app and record what you did.
 
 ## Features
 
-- **Six switchable strategies:** Gap & Go, Bull Flag, Opening Range Breakout,
-  VWAP Reclaim, Red-to-Green and Oversold Bounce. Switch from the dashboard
-  dropdown or with one command.
-- **Ranked picks:** stocks priced $1–20, up 5%+ on 2× normal volume, float under
-  50M. Each pick is marked BUY NOW, SETTING UP or triggered, with an entry,
-  stop, target and share size based on your risk per trade.
-- **Live alerts:** macOS notifications and sounds for buys, sells (stop, target
-  or trailing stop) and stop moves. Every alert is tracked as a paper trade.
-- **Market-wide backtest:** replays every listed stock that gapped each day,
-  using only what's known at the open.
-- **Strategy-switch hint:** compares recent expectancy across strategies and
-  suggests when to switch or sit out.
-- **Two markets:** US (premarket gappers) and India (NSE F&O, IST hours).
-  Switch in the dashboard or with `--market india`.
-- **Data sources:** Alpaca (free plan), Schwab, or Yahoo for the US; Groww,
-  Zerodha Kite, or free Yahoo NSE data for India.
+- **13 strategies, switchable:** Gap & Go, Bull Flag, Opening Range Breakout
+  (ORB), VWAP Reclaim, Red-to-Green, Oversold Bounce, and seven long setups
+  from r/Daytrading (VWAP Bounce, First-Hour Trend, Stop-Hunt Reversal, Rip &
+  Dip, Bagholder Bounce, 9:45 Reversal, ORB Retest).
+- **Buyable now:** every setup that has triggered and can still be bought,
+  across all strategies. Each one shows its entry, stop, 2R target and share
+  size from your risk per trade, plus:
+  - **setup odds:** a replay of the rest of the day, run 10,000 times on the
+    stock's own price history, plus this rule's track record on the stock;
+  - **news and earnings warnings.**
+- **Alerts on your phone (ntfy):** BUY when your active strategy triggers, SELL
+  when one of your positions hits its stop, target, trailing exit or time
+  exit, and a note when a stop moves.
+- **Position tracking:** record what you bought (prefilled from a setup), and
+  each position shows HOLD or SELL NOW with the reason, plus live P&L.
+- **Daily risk limits:** a max daily loss, a max number of trades per day and
+  a max number of open positions. When one is hit, BUY alerts pause.
+- **Market-wide backtest and auto-switch:** it replays every listed stock that
+  gapped, using only what's known at the open. Each morning it picks the
+  strategy with the best recent results, and needs at least 10 trades before
+  judging one.
+- **Two markets with their own hours and calendars:** US (premarket gappers,
+  ET) and India (NSE F&O, IST). Holidays and early closes are handled.
+- **Runs by itself on a Mac:** the monitors start before each market opens,
+  and the dashboard is always on and reachable from your phone through
+  Tailscale.
+- **Data sources:** Alpaca (free plan), Schwab or Yahoo for the US; Groww,
+  Zerodha Kite or free Yahoo data for NSE.
 
 ## Quick start
 
 ```bash
-git clone <this repo> && cd trade
-./daytrader/run.sh          # builds the environment, then opens the dashboard at http://localhost:8501
+git clone https://github.com/Zura03/day-trade-scanner.git trade && cd trade
+./daytrader/run.sh            # builds the environment, opens the dashboard at http://localhost:8501
 ```
 
-For better data, add free Alpaca paper-account keys to `daytrader/.env`. See
-the setup steps below.
+It works straight away on free Yahoo data. For better US data, add a free
+Alpaca paper account's keys to `daytrader/.env` (copy `.env.example`). To run
+everything automatically every market day:
 
 ```bash
+./daytrader/scripts/autostart.sh install
+```
+
+Common commands (add `--market india` for NSE):
+
+```bash
+./daytrader/run.sh scan --buyable     # what's buyable right now, with odds and news
 ./daytrader/run.sh monitor            # live BUY/SELL alerts
-./daytrader/run.sh scan --all         # every candidate vs every strategy
+./daytrader/run.sh positions          # your positions: HOLD or SELL NOW
+./daytrader/run.sh risk               # today's P&L and trades vs your limits
 ./daytrader/run.sh backtest --days 30
-./daytrader/run.sh hint               # should I switch strategies?
-./daytrader/run.sh switch gap_and_go
-./daytrader/run.sh --market india scan --all   # same commands for NSE
+./daytrader/run.sh hint               # which strategy is working lately?
 ```
 
 ## Documentation
 
-Full setup (Alpaca, Schwab, Groww and Zerodha keys), strategy rules, exits, configuration
-and known limits are in [daytrader/README.md](daytrader/README.md).
+Setup for each data source, the dashboard, every strategy's rules, exits,
+alerts, phone access, configuration and known limits are all in
+**[daytrader/README.md](daytrader/README.md)**.
 
 ## Layout
 
 ```
 daytrader/
-  run.sh            launcher (creates .venv on first run)
-  cli.py            command-line interface
-  dashboard.py      Streamlit dashboard
-  config.yaml       filters, risk, exits, strategy parameters
+  run.sh                launcher (creates .venv on first run)
+  cli.py                command-line interface
+  dashboard.py          Streamlit dashboard
+  config.yaml           filters, risk, exits, limits, strategy parameters (US + india: section)
+  .streamlit/           dashboard theme
+  scripts/autostart.sh  macOS jobs: monitors before each open, always-on dashboard
   dtrader/
-    markets/        US / India session hours, calendars, F&O list
-    data/           Alpaca, Schwab, Groww, Zerodha Kite and Yahoo providers
-    strategies/     one file per strategy + registry
-    scanner.py      finds and ranks today's movers
-    backtest.py     market-wide replay of recent sessions
-    performance.py  strategy-switch hint
-    alerts.py       live monitor and notifications
+    markets/            US / India hours, exchange calendars, NSE F&O list
+    data/               Alpaca, Schwab, Groww, Zerodha Kite and Yahoo providers
+    strategies/         one file per strategy + registry
+    scanner.py          finds and ranks today's movers, BUY NOW logic
+    backtest.py         market-wide replay of recent sessions
+    performance.py      strategy-switch hint
+    odds.py             setup odds (reach simulation + track record)
+    news.py             headlines and earnings dates
+    portfolio.py        your positions, sell advice, daily risk limits
+    alerts.py           live monitor, phone and desktop notifications
+    ui.py               dashboard design tokens and components
 ```
 
-API keys live in `daytrader/.env`, and cached data in `daytrader/data/`. Git
-ignores both.
+API keys and passwords live in `daytrader/.env`; caches, trades and logs in
+`daytrader/data/`. Git ignores both.
