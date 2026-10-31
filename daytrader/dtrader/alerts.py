@@ -222,6 +222,17 @@ class Monitor:
                             f" / neither {o.p_open:.0%}; record {o.history_text()}")
             except Exception as e:
                 print(f"odds {s.symbol}: {e}", file=sys.stderr, flush=True)
+        extra = ""
+        try:
+            from .news import check as news_check
+
+            ni = news_check(s.symbol, self.m)
+            if ni.earnings_when in ("today", "next session"):
+                extra += f" | WARNING: earnings {ni.earnings_when}"
+            extra += f" | news: {ni.fresh[0].title[:80]}" if ni.fresh else " | no news today"
+        except Exception as e:
+            print(f"news {s.symbol}: {e}", file=sys.stderr, flush=True)
+        odds += extra
         notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
                f"stop {s.stop:.2f} / target {s.target:.2f} / {sh} sh "
                f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{odds}", self.cfg)

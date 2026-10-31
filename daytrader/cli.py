@@ -90,10 +90,15 @@ def cmd_scan(cfg, args):
             reach.append(f"{o.p_target:.0%}/{o.p_stop:.0%}/{o.p_open:.0%}" if o else "-")
             record.append(o.history_text() if o else "-")
         b["verdict"], b["reach_T/S/none"], b["track_record"] = verdict, reach, record
+        from dtrader.news import check as news_check
+
+        infos = [news_check(sym, cfg["market"]) for sym in b["symbol"]]
+        b["earnings"] = [n.earnings_text() for n in infos]
+        b["news"] = [n.news_text()[:60] for n in infos]
         b.insert(0, "*", ["*" if a else "" for a in b["active"]])
         b["strategy_R"] = b["strategy_R"].map(lambda v: "" if v != v else f"{v:+.2f}")
-        cols = ["*", "symbol", "strategy", "verdict", "reach_T/S/none", "track_record", "strategy_R",
-                "triggered_at", "entry", "last", "r_from_entry", "stop", "target", "shares"]
+        cols = ["*", "symbol", "strategy", "verdict", "reach_T/S/none", "track_record", "earnings", "news",
+                "strategy_R", "triggered_at", "entry", "last", "r_from_entry", "stop", "target", "shares"]
         print(b[cols].to_string(index=False))
         print(f"\n* = active strategy ({cfg['active_strategy']}), the only one the monitor alerts on. "
               f"strategy_R = its recent average R per trade.\n{DISCLAIMER}")

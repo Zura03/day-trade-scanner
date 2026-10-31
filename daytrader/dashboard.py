@@ -252,11 +252,12 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
             return f"too few trades ({r.strategy_trades})"
         return f"{r.strategy_R:+.2f}R ({r.strategy_trades})"
 
+    from dtrader.news import check as news_check
     from dtrader.odds import setup_odds
 
     by_sym = {c.symbol: c for c in cands}
-    odds = []
-    with st.spinner("Working out the odds for each setup..."):
+    odds, news = [], []
+    with st.spinner("Working out the odds and checking news for each setup..."):
         for r in b.itertuples():
             c = by_sym.get(r.symbol)
             sig = (c.results.get(r.strategy) or {}).get("signal") if c else None
@@ -264,12 +265,18 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
                 odds.append(setup_odds(prov, cfg, get_strategy(r.strategy, cfg), sig, c.bars, c.last) if sig else None)
             except Exception:
                 odds.append(None)
+            try:
+                news.append(news_check(r.symbol, mk))
+            except Exception:
+                news.append(None)
     show = pd.DataFrame({
         "Symbol": b["symbol"],
         "Verdict": [o.verdict if o else "–" for o in odds],
         "Reach (target / stop / neither)": [f"{o.p_target:.0%} / {o.p_stop:.0%} / {o.p_open:.0%}" if o else "–"
                                             for o in odds],
         "Track record": [o.history_text() if o else "–" for o in odds],
+        "Earnings": [n.earnings_text() if n else "–" for n in news],
+        "News": [n.news_text() if n else "–" for n in news],
         "Strategy": [REGISTRY[n].title + ("  (active)" if a else "") for n, a in zip(b["strategy"], b["active"])],
         "Strategy lately": [lately(r) for r in b.itertuples()],
         "Triggered": b["triggered_at"],
@@ -278,12 +285,16 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
         "Setup": b["why"],
     })
     money = st.column_config.NumberColumn(format="%.2f")
-    st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately"]).map(ui.verdict_cell, subset=["Verdict"]),
+    st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately"]).map(ui.verdict_cell, subset=["Verdict"])
+                 .map(ui.earnings_cell, subset=["Earnings"]),
                  width="stretch", hide_index=True,
                  column_config={"Entry": money, "Last": money, "Stop": money, "Target": money,
                                 "Past entry": st.column_config.NumberColumn(format="%+.2fR"),
                                 "Shares": st.column_config.NumberColumn(format="%d"),
-                                "Setup": st.column_config.TextColumn(width="large")})
+                                "Setup": st.column_config.TextColumn(width="large"),
+                                "News": st.column_config.TextColumn(width="large")})
+    st.caption("Earnings today or next session can gap the stock through your stop. News counts headlines since "
+               "the previous close - a gap with fresh news (a catalyst) tends to follow through better.")
     st.caption(f"Only your active strategy ({strategy.title}) sends alerts. Reach: from the current price, how "
                "often a replay of the rest of today (10,000 runs on this stock's own minute bars, scaled to "
                "today's volatility, no assumed trend) hits the target first, the stop first, or neither by the "
@@ -351,6 +362,16 @@ def picks():
     st.plotly_chart(candle_chart(cand, a.get("signal"), a.get("watch"),
                                  f"{pick} · {REGISTRY[sname].title} · {a.get('status', '')}"),
                     width="stretch", config={"displaylogo": False, "modeBarButtonsToRemove": ["lasso2d", "select2d"]})
+    from dtrader.news import check as news_check
+
+    try:
+        ni = news_check(pick, mk)
+        tail = f" · {ni.earnings_text()}" if ni.earnings_when else ""
+        st.markdown(ui.section(f"{pick} headlines", f"{len(ni.fresh)} since the previous close{tail}"),
+                    unsafe_allow_html=True)
+        st.markdown(ui.headline_list(ni.headlines, mk.tz), unsafe_allow_html=True)
+    except Exception as e:
+        st.caption(f"Headlines unavailable: {str(e)[:80]}")
 
 
 ADVICE = my_advice()  # once per page load: evaluating fetches prices

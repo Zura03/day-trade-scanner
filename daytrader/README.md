@@ -275,6 +275,28 @@ shows realized P&L, win rate and average R. `./run.sh positions` prints
 everything in the terminal. Your positions are stored in
 `data/[india/]my_positions.json`, and closed trades in `my_trades.jsonl`.
 
+## News and earnings
+
+Each buyable setup shows:
+- **Earnings:** *today* (red) or *next session* (amber), when results could gap
+  the stock through your stop; or *last session*, when the results are often
+  the catalyst behind the move.
+- **News:** how many headlines since the previous close, plus the latest one.
+  A gap with fresh news tends to follow through better than one without.
+
+The chart section lists the selected stock's recent headlines, with links.
+BUY alerts add "WARNING: earnings today/next session" and the latest headline,
+or "no news today".
+
+Sources:
+- US headlines: Alpaca's news API (free with your Alpaca keys), else Yahoo
+  Finance RSS.
+- India headlines: Google News RSS, searched by company name.
+- Earnings dates: Yahoo, for both markets.
+
+SEC filings aren't used: SEC requires a personal name and email in every
+request.
+
 ## Daily risk limits
 
 These are set in `risk_limits` in `config.yaml`, per market, and apply to the

@@ -105,6 +105,27 @@ def verdict_cell(v) -> str:
             "No track record": f"color:{MUTED}"}.get(v, "")
 
 
+def earnings_cell(v) -> str:
+    return {"earnings today": f"color:{BAD};font-weight:600", "earnings next session": f"color:{WARN};font-weight:600",
+            "earnings last session": f"color:{INK_2}"}.get(v, f"color:{MUTED}")
+
+
+def headline_list(items, tz, limit: int = 6) -> str:
+    """Compact list of recent headlines (time, source, linked title)."""
+    if not items:
+        return empty("No headlines in the last two days.")
+    rows = "".join(
+        f'<div style="display:flex;gap:0.8rem;padding:0.35rem 0;border-bottom:1px solid {GRID};font-size:0.85rem">'
+        f'<span style="color:{MUTED};min-width:6.5rem;font-variant-numeric:tabular-nums">'
+        f'{h.time.astimezone(tz):%a %H:%M}</span>'
+        f'<span style="color:{MUTED};min-width:8rem;max-width:8rem;overflow:hidden;text-overflow:ellipsis;'
+        f'white-space:nowrap">{escape(h.source)}</span>'
+        + (f'<a href="{escape(h.url)}" target="_blank" style="color:{INK};text-decoration:none">{escape(h.title)}</a>'
+           if h.url else f'<span style="color:{INK}">{escape(h.title)}</span>')
+        + "</div>" for h in items[:limit])
+    return f'<div>{rows}</div>'
+
+
 def signed_cell(v) -> str:
     """Green/red for signed values (numbers or '+0.22R' strings)."""
     try:
