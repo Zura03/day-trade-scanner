@@ -77,11 +77,13 @@ provide the US news feed. With a paid Algo Trader Plus plan, set
 
 ### Fyers (India, free)
 
-1. Open a Fyers account, then go to <https://myapi.fyers.in/dashboard> and
-   **create an app**. Set its redirect URL to `http://127.0.0.1:5011/fyers`
-   (any name and description work; data permissions are enough, as the tool
-   never places orders).
-2. Put the app's **App ID** (looks like `XXXXXXXX-100`) and **Secret ID** in
+1. Open a Fyers account, then go to the API dashboard
+   (<https://fyers.in/web/api-dashboard/user-apps>) and click **Create
+   non-trading app**. Give it any name and set its redirect URL to
+   `http://127.0.0.1:5011/fyers`. A non-trading app gets quotes and history
+   and needs no static IP; the trading app (for placing orders) needs one, and
+   this tool never places orders.
+2. Put the app's **App ID** (looks like `XXXXXXXX-100`) and **App Secret** in
    `.env` as `FYERS_APP_ID` and `FYERS_SECRET_KEY`.
 3. **Each trading morning after 6:30**, run `./run.sh --market india auth`.
    A browser opens the Fyers login; sign in yourself. The tool receives only
