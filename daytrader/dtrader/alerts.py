@@ -383,7 +383,7 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
             except Exception as e:
                 failures += 1
                 print(f"tick error: {e}", file=sys.stderr, flush=True)
-                if m.key == "india" and mon.p.name in ("groww", "kite") and failures >= 2:
+                if m.key == "india" and mon.p.name in ("fyers", "groww", "kite") and failures >= 2:
                     from .data.yf_provider import YFinanceIndiaProvider
 
                     broker, failures = mon.p.name, 0

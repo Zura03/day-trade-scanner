@@ -115,6 +115,8 @@ india:
   data_source: auto
   kite:
     redirect_url: http://127.0.0.1:5010/kite   # set the same URL in your Kite app
+  fyers:
+    redirect_url: http://127.0.0.1:5011/fyers  # set the same URL in your Fyers app
 
   active_strategy: gap_and_go
 
@@ -142,7 +144,7 @@ india:
     max_position_pct: 100
     max_daily_loss_pct: 3.0
     min_shares: 2
-  broker: groww               # groww | zerodha | dhan | fyers | angel | shoonya | mstock (exact fees)
+  broker: fyers               # groww | zerodha | dhan | fyers | angel | shoonya | mstock (exact fees)
 
   risk:
     reward_risk: 2.0          # account size / risk per trade come from `capital` above

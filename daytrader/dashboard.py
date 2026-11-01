@@ -95,7 +95,7 @@ require_password()
 def provider_for(market_key: str, source: str, broker_token: str | None):
     """One provider per browser session (providers keep caches and rate-limit
     timers that aren't thread-safe). Rebuilt after 10 minutes or when a new
-    Groww/Zerodha login appears."""
+    Fyers/Groww/Zerodha login appears."""
     import time
 
     key = (market_key, source, broker_token)
@@ -108,7 +108,7 @@ def provider_for(market_key: str, source: str, broker_token: str | None):
     return p
 
 
-SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "groww", "kite", "yfinance"]}
+SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "fyers", "groww", "kite", "yfinance"]}
 
 # ---------------- sidebar ------------------------------------------------
 with st.sidebar:

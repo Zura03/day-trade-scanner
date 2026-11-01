@@ -47,7 +47,7 @@ have keys for:
 | Market | Order of preference |
 |---|---|
 | US | Alpaca, then Schwab, then Yahoo |
-| India | Groww (once today's approval is done), then Zerodha Kite (once logged in), then Yahoo NSE |
+| India | Fyers (once logged in today), then Groww (once today's approval is done), then Zerodha Kite, then Yahoo NSE |
 
 ### Alpaca (US, recommended, free)
 
@@ -75,6 +75,38 @@ provide the US news feed. With a paid Algo Trader Plus plan, set
 3. Run `./run.sh auth` and log in to Schwab in the browser that opens. Repeat
    this every 7 days.
 
+### Fyers (India, free)
+
+1. Open a Fyers account, then go to <https://myapi.fyers.in/dashboard> and
+   **create an app**. Set its redirect URL to `http://127.0.0.1:5011/fyers`
+   (any name and description work; data permissions are enough, as the tool
+   never places orders).
+2. Put the app's **App ID** (looks like `XXXXXXXX-100`) and **Secret ID** in
+   `.env` as `FYERS_APP_ID` and `FYERS_SECRET_KEY`.
+3. **Each trading morning after 6:30**, run `./run.sh --market india auth`.
+   A browser opens the Fyers login; sign in yourself. The tool receives only
+   a day token, never your password, PIN or TOTP. Tokens expire at 6:30 every
+   morning.
+
+The free plan allows 5 data calls a second, 50 a minute and **5,000 a day**,
+and going over the per-minute limit more than 3 times blocks you for the rest
+of the day. The tool keeps well inside that:
+
+- calls are paced to 3 a second and 40 a minute, shared between the dashboard
+  and the monitor;
+- it stops at 4,500 calls a day (`data/india/fyers_calls.json`) and switches
+  to Yahoo until the next day;
+- live quotes cost 1 call per 50 stocks, but 1-minute bars cost 1 call per
+  stock, so today's bars are refetched only as often as the remaining budget
+  allows: with 30 candidates, about every 2 minutes. A signal can show up to
+  about 2 minutes later than with an unlimited feed;
+- average volumes for the ~220 F&O stocks come from one Yahoo batch download
+  instead of 220 Fyers calls, and backtest history before the open may not use
+  more than 2,000 calls, keeping the rest for the session.
+
+The official `fyers-apiv3` SDK isn't used: it pins old library versions that
+break the Groww SDK, so the tool calls Fyers' REST API directly.
+
 ### Groww (India, about ₹499/month)
 
 1. Subscribe to Groww's **Trading API**, then open **Groww Cloud → API Keys**.
@@ -100,7 +132,7 @@ every 5 minutes.
    Zerodha yourself. The tool receives only a day token, never your password
    or TOTP.
 
-If neither broker is ready when the India monitor starts, it pushes a
+If no broker is ready when the India monitor starts, it pushes a
 reminder and uses Yahoo until you log in or approve.
 
 ## The dashboard
@@ -140,7 +172,7 @@ dashboard does the same things.
 | `sell SYMBOL-or-id PRICE` | Record a sale. |
 | `risk` | Today's P&L, trades and open positions against your limits. |
 | `budget` | Daily capital and what it implies: risk per trade, max position, loss limit, price cap, cost per trade. |
-| `auth` | Log in to Schwab (US) or Groww / Zerodha (India). |
+| `auth` | Log in to Schwab (US) or Fyers / Groww / Zerodha (India). |
 
 ## How a stock becomes BUY NOW
 
@@ -458,7 +490,7 @@ overrides any key for NSE.
 
 | Section | Controls |
 |---|---|
-| `data_source`, `alpaca`, `schwab`, `india.kite` | where data comes from |
+| `data_source`, `alpaca`, `schwab`, `india.fyers`, `india.kite` | where data comes from |
 | `universe` | price range, minimum move, relative volume, float, number of candidates, watchlist |
 | `capital`, `broker` | daily capital and the rules for its auto-calculated values (manual overrides from Settings live in `data/…/settings.json`); broker for exact fees |
 | `risk` | account size, risk per trade, max position %, reward:risk (derived from `capital` when set) |
@@ -477,7 +509,8 @@ Keys and passwords go in `.env` (see `.env.example`). The theme is in
 - **Free data.** Alpaca's free plan shows the newest minutes from IEX only,
   which can be thin on small caps. Yahoo is unofficial, reports 0 premarket
   volume, and keeps only about 30 days of 1-minute history (Groww has
-  history from 2020).
+  history from 2020, Fyers 100 days per request). Fyers' free plan caps data
+  calls at 5,000 a day, which slows how often today's bars refresh.
 - **Backtests** are a ranking of strategies over recent sessions, not a
   forecast. Fills assume the trigger price plus slippage, and real fills on
   fast small caps can be worse.

@@ -265,6 +265,16 @@ def cmd_auth(cfg, args):
         from dtrader.data import india_broker
 
         broker = india_broker()
+        if broker == "fyers":
+            from dtrader.data.fyers_provider import DEFAULT_REDIRECT, fyers_keys, fyers_login
+
+            keys = fyers_keys()
+            fyers_login(keys[0], keys[1], (cfg.get("fyers") or {}).get("redirect_url", DEFAULT_REDIRECT))
+            p = get_provider(cfg, "fyers")
+            q = p.quotes(["RELIANCE"])
+            px = f", RELIANCE {q['last'].iloc[0]:.2f}" if len(q) else ""
+            print(f"Fyers login OK for today{px}.")
+            return
         if broker == "groww":
             from dtrader.data.groww_provider import groww_token, last_token_error
 
@@ -286,8 +296,8 @@ def cmd_auth(cfg, args):
             p = get_provider(cfg, "kite")
             print(f"Zerodha login OK for today ({len(p.all_symbols())} F&O stocks available).")
             return
-        sys.exit("No India broker in .env: add GROWW_API_KEY / GROWW_API_SECRET "
-                 "(or KITE_API_KEY / KITE_API_SECRET).")
+        sys.exit("No India broker in .env: add FYERS_APP_ID / FYERS_SECRET_KEY "
+                 "(or GROWW_API_KEY / GROWW_API_SECRET, or KITE_API_KEY / KITE_API_SECRET).")
     p = get_provider(cfg, "schwab")
     r = p.client.get_quotes(["AAPL"])
     print("Schwab login OK" if r.status_code == 200 else f"Schwab returned {r.status_code}: {r.text[:200]}")
@@ -296,7 +306,7 @@ def cmd_auth(cfg, args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--market", default="us", choices=["us", "india"], help="market to work on (default us)")
-    ap.add_argument("--source", choices=["auto", "alpaca", "schwab", "yfinance", "groww", "kite"], help="override data_source")
+    ap.add_argument("--source", choices=["auto", "alpaca", "schwab", "yfinance", "fyers", "groww", "kite"], help="override data_source")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("strategies")
     s = sub.add_parser("switch"); s.add_argument("name")

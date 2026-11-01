@@ -6,8 +6,8 @@ from .base import DataProvider
 
 def get_provider(cfg: dict | None = None, source: str | None = None) -> DataProvider:
     """US:    auto = Alpaca if its keys are in .env, else Schwab, else free Yahoo.
-    India: auto = your broker (Groww, else Zerodha Kite) once today's login is
-           done, else free Yahoo (NSE)."""
+    India: auto = your broker (Fyers, else Groww, else Zerodha Kite) once
+           today's login is done, else free Yahoo (NSE)."""
     cfg = cfg or load_config()
     market = cfg["market"]
     source = source or cfg.get("data_source", "auto")
@@ -37,9 +37,12 @@ def get_provider(cfg: dict | None = None, source: str | None = None) -> DataProv
 
 # ---- India brokers ----------------------------------------------------------
 def india_broker() -> str | None:
-    """Which broker API is configured in .env (Groww preferred)."""
+    """Which broker API is configured in .env (Fyers, then Groww, then Kite)."""
+    from .fyers_provider import fyers_keys
     from .groww_provider import groww_credentials
 
+    if fyers_keys():
+        return "fyers"
     if groww_credentials():
         return "groww"
     if kite_keys():
@@ -48,6 +51,13 @@ def india_broker() -> str | None:
 
 
 def _broker_provider(broker: str, fetch_token: bool = True) -> DataProvider | None:
+    if broker == "fyers":
+        from .fyers_provider import DAILY_BUDGET, FyersProvider, calls_today, fyers_keys, token_valid_today
+
+        tok, keys = token_valid_today(), fyers_keys()
+        if calls_today() >= DAILY_BUDGET:  # free plan's 5,000 calls/day used up: Yahoo until tomorrow
+            return None
+        return FyersProvider(keys[0], tok) if tok and keys else None
     if broker == "groww":
         from .groww_provider import GrowwProvider, cached_token, groww_token
 
@@ -62,7 +72,7 @@ def _broker_provider(broker: str, fetch_token: bool = True) -> DataProvider | No
 
 
 def _india_provider(source: str) -> DataProvider:
-    if source in ("groww", "kite"):
+    if source in ("fyers", "groww", "kite"):
         p = _broker_provider(source)
         if p is None:
             raise RuntimeError(india_login_hint(source) or f"{source} is not configured in .env")
@@ -82,6 +92,10 @@ def _india_provider(source: str) -> DataProvider:
 def india_login_needed() -> bool:
     """A broker is configured but there's no token for today yet (no network call)."""
     broker = india_broker()
+    if broker == "fyers":
+        from .fyers_provider import token_valid_today
+
+        return not token_valid_today()
     if broker == "groww":
         from .groww_provider import cached_token
 
@@ -95,6 +109,14 @@ def india_login_needed() -> bool:
 
 def india_login_hint(broker: str | None = None) -> str | None:
     broker = broker or india_broker()
+    if broker == "fyers":
+        from .fyers_provider import DAILY_BUDGET, calls_today, fyers_keys
+
+        if not fyers_keys():
+            return "Fyers: set FYERS_APP_ID / FYERS_SECRET_KEY in .env"
+        if calls_today() >= DAILY_BUDGET:
+            return f"Fyers: today's API budget is used ({DAILY_BUDGET} calls) - free Yahoo data until tomorrow"
+        return "Fyers: log in for today with  ./run.sh --market india auth"
     if broker == "groww":
         from .groww_provider import groww_credentials
 
@@ -114,6 +136,10 @@ def india_login_hint(broker: str | None = None) -> str | None:
 def india_token_state() -> str:
     """Changes when a new broker token appears (dashboard cache key)."""
     broker = india_broker()
+    if broker == "fyers":
+        from .fyers_provider import DAILY_BUDGET, calls_today, token_valid_today
+
+        return f"fyers:{token_valid_today() or ''}:{calls_today() >= DAILY_BUDGET}"
     if broker == "groww":
         from .groww_provider import cached_token
 

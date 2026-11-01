@@ -42,7 +42,7 @@ switches to the strategy that has been working best.
 - **Runs by itself on a Mac:** the monitors start before each market opens,
   and the dashboard is always on and reachable from your phone through
   Tailscale.
-- **Data sources:** Alpaca (free plan), Schwab or Yahoo for the US; Groww,
+- **Data sources:** Alpaca (free plan), Schwab or Yahoo for the US; Fyers (free), Groww,
   Zerodha Kite or free Yahoo data for NSE.
 
 ## Quick start
@@ -90,7 +90,7 @@ daytrader/
   scripts/autostart.sh  macOS jobs: monitors before each open, always-on dashboard
   dtrader/
     markets/            US / India hours, exchange calendars, NSE F&O list
-    data/               Alpaca, Schwab, Groww, Zerodha Kite and Yahoo providers
+    data/               Alpaca, Schwab, Fyers, Groww, Zerodha Kite and Yahoo providers
     strategies/         one file per strategy + registry
     scanner.py          finds and ranks today's movers, BUY NOW logic
     backtest.py         market-wide replay of recent sessions
