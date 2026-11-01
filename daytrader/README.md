@@ -171,6 +171,7 @@ dashboard does the same things.
 | `monitor [--once] [--session]` | Live alerts (`--session`: the daily job's mode). |
 | `buy SYMBOL SHARES PRICE [--stop --target --strategy]` | Record a buy (default stop 2% below, target 2R above). |
 | `positions` | Your positions: HOLD or SELL NOW and why. |
+| `sync` | India: record today's Fyers buys and sells as positions. |
 | `sell SYMBOL-or-id PRICE` | Record a sale. |
 | `risk` | Today's P&L, trades and open positions against your limits. |
 | `budget` | Daily capital and what it implies: risk per trade, max position, loss limit, price cap, cost per trade. |
@@ -327,6 +328,29 @@ The monitor pushes **"Sell your 100 JSWENERGY"** once when an exit triggers,
 for any strategy, plus a note when your stop moves. When you've sold, press
 **Record sale**, or run `./run.sh sell JSWENERGY 512`; the trade moves to
 Closed trades.
+
+### Automatic recording from Fyers (India)
+
+Once you've logged in to Fyers for the day, you don't need to record India
+trades at all. The monitor (every minute) and the dashboard (every 30
+seconds) read your Fyers tradebook and record each fill:
+
+- **A buy** opens a position. If the stock was a buyable setup in the last 90
+  minutes, its strategy, stop and target are used. Otherwise the stop is 1%
+  below your price (`india.fyers.default_stop_pct`) with a 2R target, and
+  the position is marked "check it", so adjust the stop in My positions.
+- **Another buy** of a stock you hold from today adds to it at the average
+  price. A buy you had already recorded by hand (same stock and shares, within
+  10 minutes) is linked to that row instead of being added twice.
+- **A sell** closes that stock's positions, oldest first, partly if you sold
+  part.
+- Futures and options, and sells with nothing to close (short selling), are
+  ignored.
+
+You get a phone push for each recorded trade. `./run.sh --market india sync`
+does the same once from the terminal. The tradebook is a user-info API with
+its own 100,000-calls-a-day limit, so it doesn't use the 5,000 data calls.
+Turn it off with `india.fyers.sync_trades: false`.
 
 Your positions are stored in `data/[india/]my_positions.json`, and closed
 trades in `my_trades.jsonl`. These are separate from the monitor's paper

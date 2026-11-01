@@ -188,6 +188,19 @@ def cmd_buy(cfg, args):
           f"target {row['target']:.2f}), id {row['id']}. `positions` shows when to sell.")
 
 
+def cmd_sync(cfg, args):
+    from dtrader import broker_sync
+
+    if not broker_sync.enabled(cfg):
+        sys.exit("Trade sync needs --market india and FYERS_APP_ID / FYERS_SECRET_KEY in .env.")
+    from dtrader.data.fyers_provider import token_valid_today
+
+    if not token_valid_today():
+        sys.exit("Log in to Fyers for today first:  ./run.sh --market india auth")
+    msgs = broker_sync.sync(cfg)
+    print("\n".join(msgs) if msgs else "No new Fyers trades to record.")
+
+
 def cmd_positions(cfg, args):
     from dtrader.portfolio import evaluate, load_closed, load_positions
 
@@ -329,6 +342,7 @@ def main():
     s.add_argument("--stop", type=float, help="default 2%% below price")
     s.add_argument("--target", type=float, help="default 2R above price"); s.add_argument("--strategy")
     sub.add_parser("positions", help="your open positions: HOLD or SELL NOW")
+    sub.add_parser("sync", help="India: record today's Fyers buys/sells as positions")
     sub.add_parser("risk", help="today's P&L, trades and open positions vs your daily limits")
     sub.add_parser("budget", help="daily capital and the risk, position and cost it implies")
     s = sub.add_parser("sell", help="record that you sold a position")
@@ -337,7 +351,7 @@ def main():
     cfg = load_config(args.market)
     {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest,
      "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth, "buy": cmd_buy,
-     "positions": cmd_positions, "sell": cmd_sell, "risk": cmd_risk, "budget": cmd_budget}[args.cmd](cfg, args)
+     "positions": cmd_positions, "sync": cmd_sync, "sell": cmd_sell, "risk": cmd_risk, "budget": cmd_budget}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

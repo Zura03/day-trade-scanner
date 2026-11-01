@@ -125,6 +125,7 @@ class Monitor:
             notify("INFO", "Strategy switched", f"Now scanning with {self.strategy.title}", self.cfg)
 
         day = session_day(self.p)
+        self._sync_broker()
         mine = self._evaluate_mine()
         self._risk_check(day, mine)
         if _time.time() - self.last_universe > 300 or not self.cands:
@@ -150,6 +151,18 @@ class Monitor:
         self._manage_positions(day)
         self._check_my_positions(mine)
         self._save()
+
+    def _sync_broker(self) -> None:
+        """Record buys/sells made in the Fyers app (India, once logged in)."""
+        from . import broker_sync
+
+        if not broker_sync.enabled(self.cfg):
+            return
+        try:
+            for msg in broker_sync.sync(self.cfg):
+                notify("INFO", "Fyers trade recorded", msg, self.cfg)
+        except Exception as e:
+            print(f"Fyers trade sync failed: {e}", file=sys.stderr, flush=True)
 
     def _evaluate_mine(self) -> list:
         """[(row, Advice)] for your recorded positions (read-only on the file)."""

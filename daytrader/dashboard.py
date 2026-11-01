@@ -181,9 +181,28 @@ tab_picks, tab_mine, tab_bt, tab_hint, tab_alerts, tab_guide, tab_settings = st.
     key="main_tab")  # keyed so the selected tab survives reruns (form inputs, buttons)
 
 
+def sync_broker() -> None:
+    """Pick up buys/sells made in the Fyers app (at most every 30 s per session)."""
+    import time as _t
+
+    from dtrader import broker_sync
+
+    if not broker_sync.enabled(cfg) or _t.time() - st.session_state.get("broker_sync_at", 0) < 30:
+        return
+    st.session_state["broker_sync_at"] = _t.time()
+    try:
+        for msg in broker_sync.sync(cfg):
+            st.toast(msg)
+    except Exception as e:
+        st.session_state["broker_sync_error"] = str(e)[:120]
+    else:
+        st.session_state.pop("broker_sync_error", None)
+
+
 def my_advice() -> list[tuple[dict, object]]:
     from dtrader.portfolio import evaluate, load_positions
 
+    sync_broker()
     out = []
     for row in load_positions(mk):
         try:
@@ -456,6 +475,13 @@ with tab_mine:
                     unsafe_allow_html=True)
 
     st.markdown(ui.section("Record a buy"), unsafe_allow_html=True)
+    from dtrader import broker_sync
+
+    if broker_sync.enabled(cfg):
+        err = st.session_state.get("broker_sync_error")
+        st.caption("Buys and sells you make in the Fyers app are recorded here automatically within a minute "
+                   "(once you've logged in for the day), so you don't need to record them below."
+                   + (f" Last sync failed: {err}" if err else ""))
     if RISK.blocked:
         st.warning("A daily risk limit is reached (" + "; ".join(RISK.breaches) + "). You can still record a "
                    "buy you've already made, but the plan says no new trades today.")

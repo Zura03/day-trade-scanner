@@ -25,8 +25,9 @@ switches to the strategy that has been working best.
 - **Alerts on your phone (ntfy):** BUY when your active strategy triggers, SELL
   when one of your positions hits its stop, target, trailing exit or time
   exit, and a note when a stop moves.
-- **Position tracking:** record what you bought (prefilled from a setup), and
-  each position shows HOLD or SELL NOW with the reason, plus live P&L.
+- **Position tracking:** record what you bought (prefilled from a setup), or
+  let it read your Fyers trades automatically. Each position shows HOLD or
+  SELL NOW with the reason, plus live P&L.
 - **Daily capital:** set the amount you trade per day, and risk per trade,
   position size, the loss limit and the affordable price range follow as
   percentages of it. Your broker's exact fees (Groww, Zerodha, Fyers and
@@ -98,6 +99,7 @@ daytrader/
     odds.py             setup odds (reach simulation + track record)
     news.py             headlines and earnings dates
     portfolio.py        your positions, sell advice, daily risk limits
+    broker_sync.py      records your Fyers buys/sells as positions
     costs.py            broker + statutory fees per trade
     alerts.py           live monitor, phone and desktop notifications
     ui.py               dashboard design tokens and components

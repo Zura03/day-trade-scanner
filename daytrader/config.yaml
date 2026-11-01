@@ -117,6 +117,8 @@ india:
     redirect_url: http://127.0.0.1:5010/kite   # set the same URL in your Kite app
   fyers:
     redirect_url: http://127.0.0.1:5011/fyers  # set the same URL in your Fyers app
+    sync_trades: true          # record buys/sells made in the Fyers app as positions
+    default_stop_pct: 1.0      # stop for a buy that matches no recent setup (target = 2R)
 
   active_strategy: gap_and_go
 

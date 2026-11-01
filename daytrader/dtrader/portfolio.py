@@ -6,8 +6,11 @@ Separate from the monitor's paper trades. You record a buy (dashboard or
 says HOLD or SELL NOW with the reason; the monitor pushes a SELL alert. When
 you sell, record it to move the position into your trade history.
 
-Files (per market): data/[india/]my_positions.json (open; written only by
-you via the dashboard/CLI) and my_trades.jsonl (closed).
+With Fyers logged in, buys and sells you make in the Fyers app are recorded
+automatically from its tradebook (broker_sync.py).
+
+Files (per market): data/[india/]my_positions.json (open) and
+my_trades.jsonl (closed).
 """
 from __future__ import annotations
 
@@ -49,7 +52,7 @@ def _save_positions(rows: list[dict], m: Market) -> None:
 
 
 def add_buy(market: str | Market, symbol: str, shares: int, price: float, stop: float, target: float,
-            strategy: str = "manual", when: datetime | None = None) -> dict:
+            strategy: str = "manual", when: datetime | None = None, **extra) -> dict:
     m = get_market(market)
     if shares <= 0 or price <= 0:
         raise ValueError("shares and price must be positive")
@@ -58,7 +61,7 @@ def add_buy(market: str | Market, symbol: str, shares: int, price: float, stop: 
     row = {
         "id": uuid.uuid4().hex[:8], "symbol": symbol.upper().strip(), "shares": int(shares),
         "entry": float(price), "stop": float(stop), "target": float(target), "strategy": strategy,
-        "entry_time": (when or m.now()).isoformat(timespec="minutes"),
+        "entry_time": (when or m.now()).isoformat(timespec="minutes"), **extra,
     }
     rows = load_positions(m)
     rows.append(row)
@@ -71,7 +74,8 @@ def update_position(market: str | Market, pid: str, **changes) -> None:
     rows = load_positions(m)
     for r in rows:
         if r["id"] == pid:
-            r.update({k: v for k, v in changes.items() if k in ("stop", "target", "shares")})
+            r.update({k: v for k, v in changes.items()
+                      if k in ("stop", "target", "shares", "entry", "orders", "source", "note")})
     _save_positions(rows, m)
 
 
@@ -81,19 +85,25 @@ def delete_position(market: str | Market, pid: str) -> None:
 
 
 def record_sell(market: str | Market, pid: str, price: float, when: datetime | None = None,
-                reason: str = "sold") -> dict | None:
+                reason: str = "sold", shares: int | None = None) -> dict | None:
+    """Close a position, or part of it when `shares` is less than it holds."""
     m = get_market(market)
     rows = load_positions(m)
     row = next((r for r in rows if r["id"] == pid), None)
     if row is None:
         return None
+    sold = min(int(shares), row["shares"]) if shares else row["shares"]
     risk = max(row["entry"] - row["stop"], 1e-9)
-    done = {**row, "exit": float(price), "exit_time": (when or m.now()).isoformat(timespec="minutes"),
-            "exit_reason": reason, "pnl": round((price - row["entry"]) * row["shares"], 2),
+    done = {**row, "shares": sold, "exit": float(price), "exit_time": (when or m.now()).isoformat(timespec="minutes"),
+            "exit_reason": reason, "pnl": round((price - row["entry"]) * sold, 2),
             "r_multiple": round((price - row["entry"]) / risk, 2)}
     with open(_closed_path(m), "a") as f:
         f.write(json.dumps(done) + "\n")
-    _save_positions([r for r in rows if r["id"] != pid], m)
+    if sold < row["shares"]:
+        row["shares"] -= sold
+        _save_positions(rows, m)
+    else:
+        _save_positions([r for r in rows if r["id"] != pid], m)
     return done
 
 
@@ -248,9 +258,10 @@ def risk_status(market: str | Market, provider, cfg: dict, advice: list | None =
     closed = load_closed(m)
     closed_today = closed[closed["exit_time"].astype(str).str.startswith(today)] if len(closed) else closed
     realized = float(closed_today["pnl"].sum()) if len(closed_today) else 0.0
-    bought_today = sum(r["entry_time"].startswith(today) for r in open_rows)
-    if len(closed):
-        bought_today += int(closed["entry_time"].astype(str).str.startswith(today).sum())
+    ids = {r["id"] for r in open_rows if r["entry_time"].startswith(today)}
+    if len(closed):  # a partly sold position leaves several closed rows with one id
+        ids |= set(closed.loc[closed["entry_time"].astype(str).str.startswith(today), "id"])
+    bought_today = len(ids)
 
     breaches = []
     pnl = realized + unrealized
