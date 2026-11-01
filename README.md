@@ -27,6 +27,10 @@ switches to the strategy that has been working best.
   exit, and a note when a stop moves.
 - **Position tracking:** record what you bought (prefilled from a setup), and
   each position shows HOLD or SELL NOW with the reason, plus live P&L.
+- **Daily capital:** set the amount you trade per day, and risk per trade,
+  position size, the loss limit and the affordable price range follow as
+  percentages of it. Your broker's exact fees (Groww, Zerodha, Fyers and
+  others) are applied to every backtest trade.
 - **Daily risk limits:** a max daily loss, a max number of trades per day and
   a max number of open positions. When one is hit, BUY alerts pause.
 - **Market-wide backtest and auto-switch:** it replays every listed stock that
@@ -63,6 +67,7 @@ Common commands (add `--market india` for NSE):
 ./daytrader/run.sh monitor            # live BUY/SELL alerts
 ./daytrader/run.sh positions          # your positions: HOLD or SELL NOW
 ./daytrader/run.sh risk               # today's P&L and trades vs your limits
+./daytrader/run.sh budget             # daily capital -> risk per trade, position, costs
 ./daytrader/run.sh backtest --days 30
 ./daytrader/run.sh hint               # which strategy is working lately?
 ```
@@ -93,6 +98,7 @@ daytrader/
     odds.py             setup odds (reach simulation + track record)
     news.py             headlines and earnings dates
     portfolio.py        your positions, sell advice, daily risk limits
+    costs.py            broker + statutory fees per trade
     alerts.py           live monitor, phone and desktop notifications
     ui.py               dashboard design tokens and components
 ```

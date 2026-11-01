@@ -127,14 +127,24 @@ india:
     max_candidates: 30
     watchlist: []
 
+  # --- Daily capital: the amount you trade per day. Risk per trade, position
+  # size, the daily loss limit and the highest affordable share price are all
+  # percentages of it. Editable in the dashboard's Settings tab (which saves to
+  # data/india/settings.json and overrides these values).
+  capital:
+    daily: 5000               # rupees traded per day
+    risk_per_trade_pct: 1.0   # lost on a stop-out (-> Rs 50)
+    max_position_pct: 100     # largest single position (-> Rs 5,000)
+    max_daily_loss_pct: 3.0   # pause BUY alerts after losing this much today (-> Rs 150)
+    min_shares: 2             # only stocks you can buy at least this many of (-> price <= Rs 2,500)
+  broker: groww               # groww | zerodha | dhan | fyers | angel | shoonya | mstock (exact fees)
+
   risk_limits:
-    max_daily_loss: 7500      # rupees (3 x risk_per_trade)
+    max_trades_per_day: 2
+    max_open_positions: 1     # one position uses the whole day's capital
 
   risk:
-    account_size: 500000
-    risk_per_trade: 2500      # rupees lost if the stop is hit
-    max_position_pct: 25
-    reward_risk: 2.0
+    reward_risk: 2.0          # account size / risk per trade come from `capital` above
 
   exits:
     trail_after_r: 1.0
@@ -179,7 +189,7 @@ india:
       min_gap_pct: 1
 
   backtest:
-    slippage_pct: 0.08        # per side: slippage + STT/exchange charges
+    slippage_pct: 0.05        # per side, price slippage only - broker fees come from `broker`
     universe: market          # every F&O stock that gapped each day
     min_avg_volume: 200000
     max_symbols_per_day: 40

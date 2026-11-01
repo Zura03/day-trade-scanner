@@ -20,6 +20,7 @@ re-checks every morning which of 13 strategies has been working.
 [Strategies](#strategies) ·
 [Exits and R](#exits-and-r) ·
 [Your positions](#your-positions-and-when-to-sell) ·
+[Daily capital and costs](#daily-capital-and-costs) ·
 [Risk limits](#daily-risk-limits) ·
 [Strategy switching](#strategy-switching) ·
 [Automation and alerts](#running-automatically-and-alerts) ·
@@ -117,6 +118,7 @@ next opens, plus the data source, active strategy and last scan time.
 | **Switch hint** | Which strategy is working lately, and a button to apply the suggestion. |
 | **Alerts** | The monitor's paper trades, the alert log and closed paper trades. |
 | **Strategies** | A card per strategy with its rules and parameters. |
+| **Settings** | Daily capital and the percentages derived from it, broker, trade limits; live amounts and a broker cost comparison. |
 
 Toggles in the sidebar: **Show all strategies in the scan table**, and
 **Auto-refresh every 60 s**.
@@ -137,6 +139,7 @@ dashboard does the same things.
 | `positions` | Your positions: HOLD or SELL NOW and why. |
 | `sell SYMBOL-or-id PRICE` | Record a sale. |
 | `risk` | Today's P&L, trades and open positions against your limits. |
+| `budget` | Daily capital and what it implies: risk per trade, max position, loss limit, price cap, cost per trade. |
 | `auth` | Log in to Schwab (US) or Groww / Zerodha (India). |
 
 ## How a stock becomes BUY NOW
@@ -295,16 +298,53 @@ Your positions are stored in `data/[india/]my_positions.json`, and closed
 trades in `my_trades.jsonl`. These are separate from the monitor's paper
 trades.
 
+## Daily capital and costs
+
+Set **one number, the amount you trade per day**, and the money settings follow
+as percentages of it. Use the dashboard's **Settings** tab, which saves per
+market to `data/[india/]settings.json` and overrides `config.yaml`, or the
+`capital:` section of `config.yaml`.
+
+| Setting | India default | With ₹5,000 a day |
+|---|---|---|
+| Risk per trade | 1% | ₹50 lost on a stop-out |
+| Max position | 100% | ₹5,000 in one trade |
+| Daily loss limit | 3% | ₹150, then BUY alerts pause |
+| Minimum shares | 2 | stocks above ₹2,500 are skipped |
+| Broker | Groww | exact fees per trade |
+
+Share size is the lower of "risk per trade ÷ R" and "max position ÷ price".
+Setups you couldn't buy the minimum number of shares of aren't sized, and the
+backtest skips them.
+
+**Costs:** the broker setting applies each broker's brokerage plus the NSE
+statutory charges (STT, stamp duty, exchange, SEBI, IPFT, GST) to every
+backtest trade at its real size. On small trades the broker matters a lot:
+
+| Round trip | ₹2,500 trade | ₹5,000 trade | ₹25,000 trade |
+|---|---|---|---|
+| Groww (0.1%, ₹5 minimum per order) | ₹12.69 (0.51%) | ₹13.57 (0.27%) | ₹56.07 (0.22%) |
+| Zerodha / Dhan / Fyers (0.03%) | ₹2.66 (0.11%) | ₹5.31 (0.11%) | ₹26.51 (0.11%) |
+
+In a 15-session India backtest at ₹5,000 a day, Groww's fees cost about 0.25R
+per trade. Gap & Go fell from +0.33R with Fyers fees to +0.07R with Groww's,
+and ORB went from +0.05R to −0.15R. `./run.sh --market india budget` prints
+your numbers.
+
+The US market has no `capital` section by default. It uses a $25,000 account
+and $100 risk per trade, and trades are commission-free; set a daily capital
+in Settings to switch the US to the same percentage-based scheme.
+
 ## Daily risk limits
 
 Set in `risk_limits` (per market) and checked against **your recorded
-positions**:
+positions**. India's loss limit comes from daily capital (above):
 
 | Limit | US | India |
 |---|---|---|
-| `max_daily_loss`: today's realized + open P&L | $300 | ₹7,500 |
-| `max_trades_per_day`: buys recorded today | 4 | 4 |
-| `max_open_positions` | 3 | 3 |
+| `max_daily_loss`: today's realized + open P&L | $300 | 3% of daily capital (₹150) |
+| `max_trades_per_day`: buys recorded today | 4 | 2 |
+| `max_open_positions` | 3 | 1 (one position uses the day's capital) |
 
 When a limit is hit:
 - BUY alerts pause, and the monitor pushes "Risk limit reached" once;
@@ -334,8 +374,9 @@ skip the morning backtest.
 the strongest gappers each day (up to 60 US / 40 India) from the whole market
 or the F&O list. A stock counts as a gapper using only what's known at the
 open: it gapped by at least the minimum move, or ran 20%+ the day before. The
-backtest charges slippage per side (US 0.1%, India 0.08% including charges)
-and skips today until the session has closed.
+backtest charges slippage per side (US 0.1%, India 0.05%), plus India's
+broker and statutory fees at each trade's real size, and skips today until the
+session has closed.
 
 ## Running automatically and alerts
 
@@ -394,7 +435,8 @@ sign-in token valid for 30 days, so you can bookmark it. Delete
   `config.yaml`).
 - **Hours:** 9:15–15:30 IST, with no new entries after 13:00 and flat by
   15:10, before the brokers' intraday (MIS) square-off around 15:20.
-- **Rupees:** ₹2,500 risk per trade on a ₹5 lakh account by default.
+- **Rupees:** sized from ₹5,000 of daily capital by default (₹50 risk per
+  trade, stocks up to ₹2,500). Change it in Settings.
 - **Separate everything:** strategy, backtest, positions and alerts live in
   `data/india/`.
 
@@ -407,7 +449,8 @@ overrides any key for NSE.
 |---|---|
 | `data_source`, `alpaca`, `schwab`, `india.kite` | where data comes from |
 | `universe` | price range, minimum move, relative volume, float, number of candidates, watchlist |
-| `risk` | account size, risk per trade, max position %, reward:risk |
+| `capital`, `broker` | daily capital and the percentages derived from it; broker for exact fees |
+| `risk` | account size, risk per trade, max position %, reward:risk (derived from `capital` when set) |
 | `risk_limits` | daily loss, trades per day, open positions |
 | `exits` | breakeven and trailing thresholds, time exit, entry cutoff, trades per stock per day |
 | `strategies` | per-strategy parameters |

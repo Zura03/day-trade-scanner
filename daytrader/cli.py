@@ -208,6 +208,27 @@ def cmd_positions(cfg, args):
               f"avg {closed['r_multiple'].mean():+.2f}R")
 
 
+def cmd_budget(cfg, args):
+    """Daily capital and everything derived from it (edit in the dashboard's Settings tab)."""
+    from dtrader.costs import broker_label, round_trip
+
+    m, d = cfg["market"], cfg.get("derived")
+    cur = m.currency
+    if not d:
+        r = cfg.get("risk", {})
+        print(f"No daily capital set for {m.name}: using account {cur}{r.get('account_size', 0):,} and "
+              f"{cur}{r.get('risk_per_trade', 0):,} risk per trade. Set it in the dashboard's Settings tab.")
+        return
+    c = round_trip(m.key, cfg.get("broker"), d["max_position"])
+    print(f"Daily capital      {cur}{d['daily_capital']:,.0f}")
+    print(f"Risk per trade     {cur}{d['risk_per_trade']:,.2f}")
+    print(f"Max position       {cur}{d['max_position']:,.0f}")
+    print(f"Daily loss limit   {cur}{d['max_daily_loss']:,.2f}")
+    print(f"Max share price    {cur}{d['max_price']:,.0f}  (at least {d['min_shares']} shares)")
+    print(f"Broker             {broker_label(m.key, cfg.get('broker') or '')}: {cur}{c.total:.2f} per round trip "
+          f"at max position ({c.pct:.2f}%, {c.total / d['risk_per_trade']:.2f}R)")
+
+
 def cmd_risk(cfg, args):
     from dtrader.portfolio import risk_status
 
@@ -295,13 +316,14 @@ def main():
     s.add_argument("--target", type=float, help="default 2R above price"); s.add_argument("--strategy")
     sub.add_parser("positions", help="your open positions: HOLD or SELL NOW")
     sub.add_parser("risk", help="today's P&L, trades and open positions vs your daily limits")
+    sub.add_parser("budget", help="daily capital and the risk, position and cost it implies")
     s = sub.add_parser("sell", help="record that you sold a position")
     s.add_argument("id_or_symbol"); s.add_argument("price", type=float)
     args = ap.parse_args()
     cfg = load_config(args.market)
     {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest,
      "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth, "buy": cmd_buy,
-     "positions": cmd_positions, "sell": cmd_sell, "risk": cmd_risk}[args.cmd](cfg, args)
+     "positions": cmd_positions, "sell": cmd_sell, "risk": cmd_risk, "budget": cmd_budget}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":
