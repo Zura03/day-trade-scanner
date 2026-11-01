@@ -79,6 +79,11 @@ Common commands (add `--market india` for NSE):
 ./daytrader/run.sh hint               # which strategy is working lately?
 ```
 
+After `autostart.sh install` you never start the app by hand: the dashboard
+is always on and each monitor starts by itself on trading days. Stop
+everything with `./daytrader/scripts/autostart.sh uninstall`. Alerts need the
+Mac awake, so keep it plugged in with the lid open during market hours.
+
 ## Documentation
 
 Setup for each data source, the dashboard, every strategy's rules, exits,

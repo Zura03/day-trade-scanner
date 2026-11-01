@@ -12,6 +12,7 @@ re-checks every morning which of 13 strategies has been working.
 **Contents:**
 [Start](#start) ·
 [Data sources](#data-sources) ·
+[Every morning](#every-morning-one-command) ·
 [The dashboard](#the-dashboard) ·
 [Commands](#commands) ·
 [How a stock becomes BUY NOW](#how-a-stock-becomes-buy-now) ·
@@ -489,9 +490,46 @@ Each job:
    own timezone, so US daylight saving needs no edits;
 4. keeps the Mac awake (`caffeinate`).
 
-If the Mac was asleep at the start time, the job runs when it wakes. Closing
-the lid on battery still sleeps the Mac. Logs are in `data/monitor.log` and
-`data/india/monitor.log`.
+Logs are in `data/monitor.log` and `data/india/monitor.log`.
+
+**You don't start the app yourself.** After `install`, the dashboard is always
+on (it starts when you log in to the Mac and restarts if it stops) and each
+monitor starts at its time on trading days. `./run.sh` starts a dashboard by
+hand, but don't run it while the always-on one is running: both use port 8501.
+`./run.sh today` doesn't start a second dashboard either; it only starts the
+background one if it has stopped.
+
+**Stopping it:**
+
+| To stop | Command | Comes back |
+|---|---|---|
+| Everything (dashboard + both monitors) | `./scripts/autostart.sh uninstall` | after `./scripts/autostart.sh install` |
+| Today's India monitor only | `launchctl kill TERM gui/$(id -u)/com.daytrader.monitor.india` | by itself at the next start time |
+| Today's US monitor only | `launchctl kill TERM gui/$(id -u)/com.daytrader.monitor` | by itself at the next start time |
+
+The dashboard can't be stopped on its own this way: it restarts whenever it
+stops, so use `uninstall`. Settings, positions, trades and your Fyers login
+are kept either way.
+
+**Battery and sleep:**
+
+- The monitors do a little work once a minute and the dashboard idles (well
+  under 1% CPU) unless a browser has it open. The real cost is staying awake:
+  while a monitor runs, `caffeinate -i` stops idle sleep (the screen still
+  turns off), which costs roughly a few percent of battery an hour.
+- The India monitor keeps the Mac awake about 09:00 to 15:35 IST, and the US
+  one about 18:00 to 02:35 IST, overnight. If you only trade one market, turn
+  the other off to save the most battery.
+- **Closing the lid sleeps the Mac anyway,** on battery or not, unless it's
+  in clamshell mode (plugged in, with an external display and keyboard). While
+  it sleeps there are no BUY/SELL alerts, no dashboard on your phone and no
+  Fyers trade recording. Nothing is lost when it wakes: the monitor carries on
+  with fresh prices, sends any SELL whose stop or target was hit while it
+  slept, and records Fyers trades made meanwhile. BUY setups that ran away
+  while it slept are missed. If the Mac was asleep at a start time, that job
+  runs when it wakes.
+- **During market hours, keep the Mac plugged in with the lid open** (screen
+  off is fine) if you want alerts while you're away from it.
 
 **Phone alerts (ntfy):**
 1. Install the free **ntfy** app.
@@ -560,6 +598,8 @@ Keys and passwords go in `.env` (see `.env.example`). The theme is in
   volume, and keeps only about 30 days of 1-minute history (Groww has
   history from 2020, Fyers 100 days per request). Fyers' free plan caps data
   calls at 5,000 a day, which slows how often today's bars refresh.
+- **The Mac has to be awake.** With the lid closed (outside clamshell mode)
+  the monitors pause and no alerts arrive until it wakes.
 - **Backtests** are a ranking of strategies over recent sessions, not a
   forecast. Fills assume the trigger price plus slippage, and real fills on
   fast small caps can be worse.
