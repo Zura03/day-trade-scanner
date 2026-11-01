@@ -85,7 +85,8 @@ provide the US news feed. With a paid Algo Trader Plus plan, set
    this tool never places orders.
 2. Put the app's **App ID** (looks like `XXXXXXXX-100`) and **App Secret** in
    `.env` as `FYERS_APP_ID` and `FYERS_SECRET_KEY`.
-3. **Each trading morning after 6:30**, run `./run.sh --market india auth`.
+3. **Each trading morning between 6:30 and 9:15**, run `./run.sh today` (or
+   just the login: `./run.sh --market india auth`).
    A browser opens the Fyers login; sign in yourself. The tool receives only
    a day token, never your password, PIN or TOTP. Tokens expire at 6:30 every
    morning.
@@ -137,6 +138,27 @@ every 5 minutes.
 If no broker is ready when the India monitor starts, it pushes a
 reminder and uses Yahoo until you log in or approve.
 
+### Every morning: one command
+
+```bash
+./run.sh today
+```
+
+Run it any time between 6:30 and 9:15 IST on a trading day. Fyers expires
+every login at 6:30, so a login made earlier would die before the open; if
+you run it between 5:15 and 6:30 it waits for 6:30 and then logs in. It then:
+
+- opens the Fyers login in your browser (skipped if today's login is done,
+  or the market is closed);
+- records any Fyers trades not yet in My positions;
+- starts the dashboard if it isn't running, and the India monitor if the
+  market is already open and it isn't running;
+- checks phone alerts are set up;
+- prints today's strategy and what the switch hint says, your capital, risk
+  and loss limit, any positions left open, and the dashboard links.
+
+The US market needs nothing daily: Alpaca keys don't expire.
+
 ## The dashboard
 
 Open `./run.sh` or http://localhost:8501. The sidebar switches between **US**
@@ -172,6 +194,7 @@ dashboard does the same things.
 | `buy SYMBOL SHARES PRICE [--stop --target --strategy]` | Record a buy (default stop 2% below, target 2R above). |
 | `positions` | Your positions: HOLD or SELL NOW and why. |
 | `sync` | India: record today's Fyers buys and sells as positions. |
+| `today` | India morning routine in one command: Fyers login (waits for 6:30 if it's earlier), trade sync, checks the dashboard, monitor and phone alerts, then shows today's plan. |
 | `sell SYMBOL-or-id PRICE` | Record a sale. |
 | `risk` | Today's P&L, trades and open positions against your limits. |
 | `budget` | Daily capital and what it implies: risk per trade, max position, loss limit, price cap, cost per trade. |

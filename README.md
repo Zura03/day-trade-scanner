@@ -61,6 +61,12 @@ everything automatically every market day:
 ./daytrader/scripts/autostart.sh install
 ```
 
+Every Indian trading morning, between 6:30 and 9:15 IST:
+
+```bash
+./daytrader/run.sh today              # Fyers login, trade sync, job checks, today's plan
+```
+
 Common commands (add `--market india` for NSE):
 
 ```bash

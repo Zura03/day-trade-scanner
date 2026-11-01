@@ -20,6 +20,7 @@ Add --market india before the command for the Indian market (default: us).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import warnings
 
@@ -188,6 +189,137 @@ def cmd_buy(cfg, args):
           f"target {row['target']:.2f}), id {row['id']}. `positions` shows when to sell.")
 
 
+def _job_state(label: str) -> str | None:
+    """launchd state of one of the autostart jobs ("running", "not running"), None if not installed."""
+    import subprocess
+
+    r = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    line = next((l for l in r.stdout.splitlines() if l.strip().startswith("state =")), "")
+    return line.split("=", 1)[1].strip() if line else "unknown"
+
+
+def _kickstart(label: str) -> None:
+    import subprocess
+
+    subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{label}"], capture_output=True)
+
+
+def cmd_today(cfg, args):
+    """Everything to do before the Indian market opens, in one go."""
+    import time as _t
+    from datetime import datetime, timedelta
+
+    from dtrader import broker_sync
+    from dtrader.data.fyers_provider import (DAILY_BUDGET, DEFAULT_REDIRECT, TOKEN_RESET, calls_today,
+                                              fyers_keys, fyers_login, token_valid_today)
+    from dtrader.portfolio import load_positions
+
+    cfg = load_config("india")
+    m = cfg["market"]
+    now = m.now()
+    hours = m.session_hours(now.date())
+    ok = lambda msg: print(f"  ok    {msg}")      # noqa: E731
+    todo = lambda msg: print(f"  TODO  {msg}")    # noqa: E731
+    print(f"{now:%A %d %b, %H:%M} IST - " + (f"NSE open {hours[0]:%H:%M}-{hours[1]:%H:%M}" if hours
+                                             else "NSE is closed today"))
+
+    # 1. Fyers login (tokens expire at 6:30 every morning)
+    print("\nFyers")
+    keys = fyers_keys()
+    reset = datetime.combine(now.date(), TOKEN_RESET, m.tz)
+    valid = token_valid_today()
+    if not keys:
+        todo("add FYERS_APP_ID / FYERS_SECRET_KEY to daytrader/.env (free data; Yahoo is used until then)")
+    elif not hours and not args.force:
+        ok("no login needed: market closed today (use --force to log in anyway)")
+    elif valid and now >= reset:
+        ok("logged in for today (lasts until 6:30 tomorrow)")
+    elif now < reset and (reset - now).total_seconds() > 75 * 60:
+        todo(f"it's {now:%H:%M}: a Fyers login made before 6:30 expires at 6:30, so run this again between "
+             f"6:30 and {hours[0]:%H:%M}" + (" (you're logged in until 6:30)" if valid else ""))
+    else:
+        if now < reset:
+            print("  waiting until 6:30 to log in (a login now would expire at 6:30) - Ctrl-C to stop", flush=True)
+            _t.sleep((reset - now).total_seconds() + 5)
+        fyers_login(keys[0], keys[1], (cfg.get("fyers") or {}).get("redirect_url", DEFAULT_REDIRECT))
+        ok("logged in for today (lasts until 6:30 tomorrow)")
+    if token_valid_today():
+        ok(f"data calls used today: {calls_today()} of {DAILY_BUDGET}")
+        if broker_sync.enabled(cfg):
+            msgs = broker_sync.sync(cfg)
+            ok("trades: " + ("; ".join(msgs) if msgs else "no new Fyers trades to record"))
+
+    # 2. background jobs
+    print("\nBackground jobs")
+    dash = _job_state("com.daytrader.dashboard")
+    if dash is None:
+        todo("autostart isn't installed: run  ./daytrader/scripts/autostart.sh install")
+    else:
+        if dash != "running":
+            _kickstart("com.daytrader.dashboard")
+            dash = "started now"
+        ok(f"dashboard: {dash}")
+        mon = _job_state("com.daytrader.monitor.india")
+        open_at = datetime.combine(now.date(), m.open, m.tz)
+        if mon is None:
+            todo("India monitor isn't installed: run  ./daytrader/scripts/autostart.sh install")
+        elif mon == "running":
+            ok("India monitor: running")
+        elif hours and open_at - timedelta(minutes=15) <= now < hours[1]:
+            _kickstart("com.daytrader.monitor.india")
+            ok("India monitor: started now")
+        elif hours and now < open_at:
+            ok("India monitor: starts by itself at 09:00")
+        else:
+            ok("India monitor: idle (market closed)")
+    if os.environ.get("NTFY_TOPIC"):
+        ok("phone alerts: on (ntfy)")
+    else:
+        todo("phone alerts are off: set NTFY_TOPIC in daytrader/.env")
+
+    # 3. the plan for today
+    print("\nToday's plan")
+    try:
+        from dtrader.backtest import load_last_trades
+        from dtrader.performance import strategy_hint
+
+        h = strategy_hint(load_last_trades(m), cfg, names=list(REGISTRY))
+        hint = h.message
+    except Exception:
+        hint = ""
+    active = cfg.get("active_strategy")
+    ok(f"strategy: {REGISTRY[active].title if active in REGISTRY else active}" + (f" - {hint}" if hint else ""))
+    d = cfg.get("derived")
+    if d:
+        cur = m.currency
+        ok(f"capital {cur}{d['daily_capital']:,.0f}: risk {cur}{d['risk_per_trade']:,.0f} per trade, stop for the "
+           f"day at -{cur}{d['max_daily_loss']:,.0f}, up to {d['max_trades_per_day']} trades")
+    held = load_positions(m)
+    if held:
+        todo(f"{len(held)} position(s) still open from before: " + ", ".join(f"{r['shares']} {r['symbol']}"
+                                                                         for r in held))
+    else:
+        ok("no open positions")
+    ts = _tailscale_url()
+    print("\nDashboard: http://localhost:8501" + (f"  |  phone: {ts}" if ts else ""))
+
+
+def _tailscale_url() -> str | None:
+    import json as _json
+    import shutil
+    import subprocess
+
+    exe = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    try:
+        r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=5)
+        name = _json.loads(r.stdout)["Self"]["DNSName"].rstrip(".")
+    except Exception:
+        return None
+    return f"http://{name}:8501" if name else None
+
+
 def cmd_sync(cfg, args):
     from dtrader import broker_sync
 
@@ -343,6 +475,8 @@ def main():
     s.add_argument("--target", type=float, help="default 2R above price"); s.add_argument("--strategy")
     sub.add_parser("positions", help="your open positions: HOLD or SELL NOW")
     sub.add_parser("sync", help="India: record today's Fyers buys/sells as positions")
+    s = sub.add_parser("today", help="India morning routine: Fyers login, trade sync, job checks, today's plan")
+    s.add_argument("--force", action="store_true", help="log in to Fyers even on a market holiday")
     sub.add_parser("risk", help="today's P&L, trades and open positions vs your daily limits")
     sub.add_parser("budget", help="daily capital and the risk, position and cost it implies")
     s = sub.add_parser("sell", help="record that you sold a position")
@@ -351,7 +485,7 @@ def main():
     cfg = load_config(args.market)
     {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest,
      "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth, "buy": cmd_buy,
-     "positions": cmd_positions, "sync": cmd_sync, "sell": cmd_sell, "risk": cmd_risk, "budget": cmd_budget}[args.cmd](cfg, args)
+     "positions": cmd_positions, "sync": cmd_sync, "today": cmd_today, "sell": cmd_sell, "risk": cmd_risk, "budget": cmd_budget}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

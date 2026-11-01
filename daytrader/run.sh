@@ -3,6 +3,7 @@
 #
 #   ./run.sh                 dashboard (http://localhost:8501)
 #   ./run.sh monitor         live BUY/SELL alerts
+#   ./run.sh today           India morning routine (Fyers login, checks, plan)
 #   ./run.sh scan --all      any other cli.py command
 set -euo pipefail
 cd "$(dirname "$0")"
