@@ -118,7 +118,7 @@ next opens, plus the data source, active strategy and last scan time.
 | **Switch hint** | Which strategy is working lately, and a button to apply the suggestion. |
 | **Alerts** | The monitor's paper trades, the alert log and closed paper trades. |
 | **Strategies** | A card per strategy with its rules and parameters. |
-| **Settings** | Daily capital and the percentages derived from it, broker, trade limits; live amounts and a broker cost comparison. |
+| **Settings** | Daily capital; risk per trade, max position, loss limit, max share price, trades per day and open positions auto-calculated from it (each can be set manually); broker; cost per trade and a broker comparison. |
 
 Toggles in the sidebar: **Show all strategies in the scan table**, and
 **Auto-refresh every 60 s**.
@@ -300,18 +300,27 @@ trades.
 
 ## Daily capital and costs
 
-Set **one number, the amount you trade per day**, and the money settings follow
-as percentages of it. Use the dashboard's **Settings** tab, which saves per
-market to `data/[india/]settings.json` and overrides `config.yaml`, or the
-`capital:` section of `config.yaml`.
+Set **one number, the amount you trade per day**, in the dashboard's
+**Settings** tab. Every other money setting is **auto-calculated** from it and
+shown as an editable value. Type over any of them to set it **manually**; a
+manual value keeps your number when daily capital changes, and **Reset to
+auto** brings back the rule. Settings are saved per market to
+`data/[india/]settings.json`.
 
-| Setting | India default | With ₹5,000 a day |
+| Value | Auto rule | With ₹5,000 a day |
 |---|---|---|
-| Risk per trade | 1% | ₹50 lost on a stop-out |
-| Max position | 100% | ₹5,000 in one trade |
-| Daily loss limit | 3% | ₹150, then BUY alerts pause |
-| Minimum shares | 2 | stocks above ₹2,500 are skipped |
-| Broker | Groww | exact fees per trade |
+| Risk per trade | 1% of daily capital | ₹50 lost on a stop-out |
+| Max position | 100% of daily capital | ₹5,000 in one trade |
+| Daily loss limit | 3% of daily capital | ₹150, then BUY alerts pause |
+| Max share price | max position ÷ 2 shares | ₹2,500 |
+| Trades per day | daily loss limit ÷ risk per trade | 3 |
+| Open positions | daily capital ÷ max position | 1 |
+
+Each rule uses the final values above it: set risk per trade to ₹80 by hand
+and trades per day becomes ₹150 ÷ ₹80 ≈ 2. The rule percentages themselves
+(1%, 100%, 3%, 2 shares) live in `capital:` in `config.yaml`. The broker is
+picked in the same tab; `./run.sh --market india budget` prints the current
+values and marks each one auto or manual.
 
 Share size is the lower of "risk per trade ÷ R" and "max position ÷ price".
 Setups you couldn't buy the minimum number of shares of aren't sized, and the
@@ -342,9 +351,11 @@ positions**. India's loss limit comes from daily capital (above):
 
 | Limit | US | India |
 |---|---|---|
-| `max_daily_loss`: today's realized + open P&L | $300 | 3% of daily capital (₹150) |
-| `max_trades_per_day`: buys recorded today | 4 | 2 |
-| `max_open_positions` | 3 | 1 (one position uses the day's capital) |
+| `max_daily_loss`: today's realized + open P&L | $300 | auto: 3% of daily capital (₹150) |
+| `max_trades_per_day`: buys recorded today | 4 | auto: loss limit ÷ risk per trade (3) |
+| `max_open_positions` | 3 | auto: daily capital ÷ max position (1) |
+
+In daily-capital mode these come from Settings and can be set manually there.
 
 When a limit is hit:
 - BUY alerts pause, and the monitor pushes "Risk limit reached" once;
@@ -449,7 +460,7 @@ overrides any key for NSE.
 |---|---|
 | `data_source`, `alpaca`, `schwab`, `india.kite` | where data comes from |
 | `universe` | price range, minimum move, relative volume, float, number of candidates, watchlist |
-| `capital`, `broker` | daily capital and the percentages derived from it; broker for exact fees |
+| `capital`, `broker` | daily capital and the rules for its auto-calculated values (manual overrides from Settings live in `data/…/settings.json`); broker for exact fees |
 | `risk` | account size, risk per trade, max position %, reward:risk (derived from `capital` when set) |
 | `risk_limits` | daily loss, trades per day, open positions |
 | `exits` | breakeven and trailing thresholds, time exit, entry cutoff, trades per stock per day |

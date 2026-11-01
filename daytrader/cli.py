@@ -220,13 +220,17 @@ def cmd_budget(cfg, args):
               f"{cur}{r.get('risk_per_trade', 0):,} risk per trade. Set it in the dashboard's Settings tab.")
         return
     c = round_trip(m.key, cfg.get("broker"), d["max_position"])
+    tag = lambda k: "manual" if k in d["manual"] else "auto"  # noqa: E731
     print(f"Daily capital      {cur}{d['daily_capital']:,.0f}")
-    print(f"Risk per trade     {cur}{d['risk_per_trade']:,.2f}")
-    print(f"Max position       {cur}{d['max_position']:,.0f}")
-    print(f"Daily loss limit   {cur}{d['max_daily_loss']:,.2f}")
-    print(f"Max share price    {cur}{d['max_price']:,.0f}  (at least {d['min_shares']} shares)")
+    print(f"Risk per trade     {cur}{d['risk_per_trade']:,.2f}  ({tag('risk_per_trade')})")
+    print(f"Max position       {cur}{d['max_position']:,.0f}  ({tag('max_position')})")
+    print(f"Daily loss limit   {cur}{d['max_daily_loss']:,.2f}  ({tag('max_daily_loss')})")
+    print(f"Max share price    {cur}{d['max_price']:,.0f}  ({tag('max_price')})")
+    print(f"Trades per day     {d['max_trades_per_day']}  ({tag('max_trades_per_day')})")
+    print(f"Open positions     {d['max_open_positions']}  ({tag('max_open_positions')})")
     print(f"Broker             {broker_label(m.key, cfg.get('broker') or '')}: {cur}{c.total:.2f} per round trip "
           f"at max position ({c.pct:.2f}%, {c.total / d['risk_per_trade']:.2f}R)")
+    print("Change any value in the dashboard's Settings tab.")
 
 
 def cmd_risk(cfg, args):

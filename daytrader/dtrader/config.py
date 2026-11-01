@@ -58,7 +58,7 @@ def load_config(market: str | Market | None = None) -> dict[str, Any]:
 
 
 # ---- settings edited in the dashboard (per market) ----------------------------
-SETTINGS_KEYS = ("capital", "broker", "risk_limits")
+SETTINGS_KEYS = ("capital", "broker")
 
 
 def _settings_path(market: str | Market | None):
@@ -77,38 +77,75 @@ def load_settings(market: str | Market | None = None) -> dict[str, Any]:
 
 
 def save_settings(updates: dict[str, Any], market: str | Market | None = None) -> None:
+    """Replace the given top-level settings (capital, broker, ...) for a market."""
     cur = load_settings(market)
-    merged = _merge(cur, {k: v for k, v in updates.items() if k in SETTINGS_KEYS})
+    cur.update({k: v for k, v in updates.items() if k in SETTINGS_KEYS})
     p = _settings_path(market)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(merged, indent=2))
+    tmp.write_text(json.dumps(cur, indent=2))
     tmp.replace(p)
 
 
+# Values derived from daily capital. Each is auto-calculated unless you set it
+# manually (capital.manual.<key>); rules use the *final* values above them.
+CAPITAL_FIELDS = ("risk_per_trade", "max_position", "max_daily_loss", "max_price",
+                  "max_trades_per_day", "max_open_positions")
+
+
+def capital_values(cap: dict[str, Any], price_ceiling: float | None = None) -> tuple[dict, dict, set]:
+    """(final values, auto values, manually set keys) for a `capital` section."""
+    daily = float(cap.get("daily") or 0)
+    manual = {k: v for k, v in (cap.get("manual") or {}).items() if k in CAPITAL_FIELDS and v is not None}
+    final, auto = {}, {}
+
+    def pick(key, value):
+        auto[key] = value
+        final[key] = float(manual[key]) if key in manual else value
+
+    pick("risk_per_trade", round(daily * float(cap.get("risk_per_trade_pct", 1.0)) / 100, 2))
+    pick("max_position", round(daily * float(cap.get("max_position_pct", 100)) / 100, 2))
+    pick("max_daily_loss", round(daily * float(cap.get("max_daily_loss_pct", 3.0)) / 100, 2))
+    price = final["max_position"] / max(int(cap.get("min_shares", 2)), 1)
+    pick("max_price", round(min(price, price_ceiling) if price_ceiling else price, 2))
+    pick("max_trades_per_day", max(1, int(round(final["max_daily_loss"] / final["risk_per_trade"])))
+         if final["risk_per_trade"] > 0 else 1)
+    pick("max_open_positions", max(1, int(daily // final["max_position"])) if final["max_position"] > 0 else 1)
+    for k in ("max_trades_per_day", "max_open_positions"):
+        final[k] = int(final[k])
+    return final, auto, set(manual)
+
+
+def price_ceiling(market: str | Market | None = None) -> float | None:
+    """universe.max_price from config.yaml (before daily-capital derivation)."""
+    m = get_market(market)
+    with open(ROOT / "config.yaml") as f:
+        raw = yaml.safe_load(f) or {}
+    u = {**(raw.get("universe") or {}), **(((raw.get(m.key) or {}) if m.key != "us" else {}).get("universe") or {})}
+    return float(u["max_price"]) if u.get("max_price") else None
+
+
 def apply_capital(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Derive the money settings from `capital.daily` (the amount traded per day):
-    risk per trade, position cap, daily loss limit and the highest affordable
-    share price are all percentages of it. No `capital` section = unchanged."""
+    """Derive the money settings from `capital.daily` (the amount traded per day).
+    Risk per trade, max position, daily loss limit, max share price, trades per
+    day and open positions are auto-calculated from it unless set manually in
+    `capital.manual`. No `capital` section = unchanged."""
     cap = cfg.get("capital") or {}
     daily = float(cap.get("daily") or 0)
     if daily <= 0:
         return cfg
+    u = dict(cfg.get("universe") or {})
+    final, auto, manual = capital_values(cap, price_ceiling=float(u["max_price"]) if "max_price" in u else None)
     risk = dict(cfg.get("risk") or {})
-    risk["account_size"] = daily
-    risk["risk_per_trade"] = round(daily * float(cap.get("risk_per_trade_pct", 1.0)) / 100, 2)
-    risk["max_position_pct"] = float(cap.get("max_position_pct", 100))
+    risk.update({"account_size": daily, "risk_per_trade": final["risk_per_trade"],
+                 "max_position_pct": final["max_position"] / daily * 100})
     cfg["risk"] = risk
     lim = dict(cfg.get("risk_limits") or {})
-    lim["max_daily_loss"] = round(daily * float(cap.get("max_daily_loss_pct", 3.0)) / 100, 2)
+    lim.update({k: final[k] for k in ("max_daily_loss", "max_trades_per_day", "max_open_positions")})
     cfg["risk_limits"] = lim
-    max_pos = daily * risk["max_position_pct"] / 100
-    min_sh = max(int(cap.get("min_shares", 1)), 1)
-    u = dict(cfg.get("universe") or {})
-    price_cap = max_pos / min_sh
-    u["max_price"] = min(float(u.get("max_price", price_cap)), price_cap)
+    u["max_price"] = final["max_price"]
     cfg["universe"] = u
-    cfg["derived"] = {"daily_capital": daily, "risk_per_trade": risk["risk_per_trade"], "max_position": max_pos,
-                      "max_daily_loss": lim["max_daily_loss"], "max_price": u["max_price"], "min_shares": min_sh}
+    cfg["derived"] = {"daily_capital": daily, **final, "auto": auto, "manual": sorted(manual),
+                      "min_shares": int(cap.get("min_shares", 2))}
     return cfg
 
 

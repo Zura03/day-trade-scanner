@@ -667,76 +667,101 @@ with tab_guide:
         f"{ex.get('no_new_entries_after')}.")
 
 # ---------------- settings ------------------------------------------------
+FIELDS = [  # key, label, rupees/dollars?, integer?, auto rule
+    ("risk_per_trade", "Risk per trade", True, False, "1% of daily capital - what a stop-out costs"),
+    ("max_position", "Max position", True, False, "100% of daily capital - the most in one trade"),
+    ("max_daily_loss", "Daily loss limit", True, False, "3% of daily capital - BUY alerts pause beyond it"),
+    ("max_price", "Max share price", True, False, "max position / 2 - so you can buy at least 2 shares"),
+    ("max_trades_per_day", "Trades per day", False, True, "loss limit / risk per trade - full stop-outs allowed"),
+    ("max_open_positions", "Open positions", False, True, "daily capital / max position"),
+]
+
 with tab_settings:
-    from dtrader.config import _settings_path, save_settings
+    from dtrader.config import capital_values, load_settings, price_ceiling, save_settings
     from dtrader.costs import BROKERS, DEFAULT_BROKER, compare, round_trip
 
     cur = mk.currency
-    cap = cfg.get("capital") or {}
-    risk0, lim0 = cfg.get("risk", {}), cfg.get("risk_limits", {})
-    acct = float(cap.get("daily") or risk0.get("account_size", 0) or 0)
+    raw_cap = dict(cfg.get("capital") or {})
+    saved_manual = dict(raw_cap.get("manual") or {})
+    capital_mode = bool(raw_cap.get("daily"))
+    pend_key = f"s_pending_{mk.key}"
+    if pend_key not in st.session_state:
+        st.session_state[pend_key] = dict(saved_manual)
+    pending: dict = st.session_state[pend_key]
+
     st.markdown(ui.section(f"{mk.name} trading budget",
-                           "everything below is a percentage of what you trade per day"), unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    daily = c1.number_input(f"Daily capital ({cur})", min_value=0.0, step=500.0, value=acct, key=f"s_daily_{mk.key}",
+                           "set your daily capital - everything else is calculated from it"), unsafe_allow_html=True)
+    if not capital_mode:
+        st.info(f"{mk.name} currently uses fixed settings (account {cur}{cfg['risk'].get('account_size', 0):,}, "
+                f"{cur}{cfg['risk'].get('risk_per_trade', 0):,} risk per trade). Saving here switches it to "
+                "daily-capital mode.")
+    c1, c2 = st.columns([1, 2])
+    daily = c1.number_input(f"Daily capital ({cur})", min_value=0.0, step=500.0, key=f"s_daily_{mk.key}",
+                            value=float(raw_cap.get("daily") or cfg["risk"].get("account_size", 0)),
                             help="The amount you trade per day.")
-    risk_pct = c2.number_input("Risk per trade (% of daily)", 0.1, 10.0, step=0.1, key=f"s_risk_{mk.key}",
-                               value=float(cap.get("risk_per_trade_pct",
-                                                   100 * risk0.get("risk_per_trade", 0) / acct if acct else 1.0)),
-                               help="What a stop-out costs you. 1% of 5,000 = 50.")
-    pos_pct = c3.number_input("Max position (% of daily)", 5.0, 100.0, step=5.0, key=f"s_pos_{mk.key}",
-                              value=float(cap.get("max_position_pct", risk0.get("max_position_pct", 100))))
-    c4, c5, c6 = st.columns(3)
-    loss_pct = c4.number_input("Daily loss limit (% of daily)", 0.5, 50.0, step=0.5, key=f"s_loss_{mk.key}",
-                               value=float(cap.get("max_daily_loss_pct",
-                                                   100 * lim0.get("max_daily_loss", 0) / acct if acct else 3.0)))
-    min_sh = c5.number_input("Minimum shares per trade", 1, 100, step=1, key=f"s_minsh_{mk.key}",
-                             value=int(cap.get("min_shares", 1)),
-                             help="Skips stocks too expensive to buy this many of with your max position.")
     brokers = list(BROKERS.get(mk.key, {}))
     bsel = cfg.get("broker") or DEFAULT_BROKER.get(mk.key)
-    broker = c6.selectbox("Broker", brokers, index=brokers.index(bsel) if bsel in brokers else 0,
+    broker = c2.selectbox("Broker (for exact fees)", brokers, index=brokers.index(bsel) if bsel in brokers else 0,
                           format_func=lambda k: BROKERS[mk.key][k]["label"], key=f"s_broker_{mk.key}")
-    c7, c8, _ = st.columns(3)
-    max_tr = c7.number_input("Max trades per day", 0, 50, step=1, key=f"s_trades_{mk.key}",
-                             value=int(lim0.get("max_trades_per_day", 4)))
-    max_open = c8.number_input("Max open positions", 0, 20, step=1, key=f"s_open_{mk.key}",
-                               value=int(lim0.get("max_open_positions", 3)))
 
-    risk_amt = daily * risk_pct / 100
-    max_pos = daily * pos_pct / 100
-    price_cap = max_pos / max(min_sh, 1)
-    cost = round_trip(mk.key, broker, max_pos)
+    final, auto, _ = capital_values({**raw_cap, "daily": daily, "manual": pending}, price_ceiling(mk))
+    cols = st.columns(3)
+    for n, (key, label, money, integer, rule) in enumerate(FIELDS):
+        col = cols[n % 3]
+        manual = key in pending
+        unit = f" ({cur})" if money else ""
+        # auto fields are keyed by their auto value, so they follow daily capital as you type
+        wkey = f"s_{key}_{mk.key}" + ("_m" if manual else f"_a{auto[key]}")
+        if integer:
+            val = col.number_input(label + unit, min_value=0, step=1, value=int(final[key]), key=wkey, help=rule)
+        else:
+            val = col.number_input(label + unit, min_value=0.0, step=10.0 if money else 1.0, format="%.2f",
+                                   value=float(final[key]), key=wkey, help=rule)
+        if not manual and abs(float(val) - float(auto[key])) > 1e-6:
+            pending[key] = val
+            st.rerun()
+        if manual:
+            pending[key] = val
+            c_a, c_b = col.columns([3, 2])
+            c_a.caption(f"**Manual** · auto: {cur if money else ''}{auto[key]:,.2f}".replace(".00", ""))
+            if c_b.button("Reset to auto", key=f"s_reset_{key}_{mk.key}"):
+                pending.pop(key, None)
+                st.rerun()
+        else:
+            col.caption(f"Auto · {rule.split(' - ')[0]}")
+
+    final, auto, _ = capital_values({**raw_cap, "daily": daily, "manual": pending}, price_ceiling(mk))
+    cost = round_trip(mk.key, broker, final["max_position"])
     st.markdown(ui.tiles([
-        ("Risk per trade", f"{cur}{risk_amt:,.0f}", f"{risk_pct:g}% of {cur}{daily:,.0f}"),
-        ("Max position", f"{cur}{max_pos:,.0f}", f"{pos_pct:g}% of daily"),
-        ("Daily loss limit", f"{cur}{daily * loss_pct / 100:,.0f}", "BUY alerts pause beyond this"),
-        ("Max share price", f"{cur}{price_cap:,.0f}",
-         f"to buy at least {min_sh} share{'s' if min_sh > 1 else ''}"),
-        ("Cost per round trip", f"{cur}{cost.total:,.2f}",
-         f"{cost.pct:.2f}% of {cur}{max_pos:,.0f}" + (f" · {cost.total / risk_amt:.2f}R" if risk_amt else "")),
+        ("Cost per round trip", f"{cur}{cost.total:,.2f}", f"{cost.pct:.2f}% of a {cur}{final['max_position']:,.0f} trade"),
+        ("Cost in R", f"{cost.total / final['risk_per_trade']:.2f}R" if final["risk_per_trade"] else "-",
+         f"of {cur}{final['risk_per_trade']:,.0f} risk per trade"),
+        ("Worst day", f"-{cur}{final['max_daily_loss']:,.0f}", f"{final['max_daily_loss'] / daily * 100:.1f}% of daily"
+         if daily else None),
     ]), unsafe_allow_html=True)
-    b1, b2, _ = st.columns([1, 1, 3])
-    if b1.button("Save settings", type="primary", key=f"s_save_{mk.key}"):
-        save_settings({"capital": {"daily": daily, "risk_per_trade_pct": risk_pct, "max_position_pct": pos_pct,
-                                   "max_daily_loss_pct": loss_pct, "min_shares": int(min_sh)},
-                       "broker": broker,
-                       "risk_limits": {"max_trades_per_day": int(max_tr), "max_open_positions": int(max_open)}}, mk)
-        st.toast(f"Saved {mk.name} settings: {cur}{daily:,.0f} a day, {cur}{risk_amt:,.0f} risk per trade")
+
+    dirty = (daily != float(raw_cap.get("daily") or 0) or pending != saved_manual or broker != bsel)
+    b1, b2, b3 = st.columns([1, 1, 3])
+    if b1.button("Save settings", type="primary", key=f"s_save_{mk.key}", disabled=not dirty and capital_mode):
+        save_settings({"capital": {"daily": daily, "manual": dict(pending)}, "broker": broker}, mk)
+        st.session_state.pop(pend_key, None)
+        st.toast(f"Saved: {cur}{daily:,.0f} a day, {cur}{final['risk_per_trade']:,.0f} risk per trade")
         st.rerun()
-    if _settings_path(mk).exists() and b2.button("Reset to config.yaml", key=f"s_reset_{mk.key}"):
-        _settings_path(mk).unlink()
+    if pending and b2.button("Reset all to auto", key=f"s_resetall_{mk.key}"):
+        pending.clear()
         st.rerun()
-    st.caption("Saved per market in data/" + ("" if mk.key == "us" else f"{mk.key}/") + "settings.json, overriding "
-               "config.yaml. The scanner, sizing, alerts, risk limits and backtest use these immediately; the "
-               "running monitor picks them up at its next start.")
+    if dirty:
+        b3.caption("Unsaved changes.")
+    st.caption("Saved per market in data/" + ("" if mk.key == "us" else f"{mk.key}/") + "settings.json. The scanner, "
+               "share sizes, alerts, risk limits and backtest use these immediately; the running monitor picks "
+               "them up at its next start. The auto rules' percentages can be changed in config.yaml (capital:).")
 
     if mk.key == "india":
         st.markdown(ui.section("Cost per round trip by broker", "brokerage + statutory charges, NSE intraday"),
                     unsafe_allow_html=True)
-        sizes = sorted({round(max_pos), round(max_pos / 2), 25_000})
+        sizes = sorted({round(final["max_position"]), round(final["max_position"] / 2), 25_000})
         rows = []
-        for key, label, _c in compare(mk.key, max_pos):
+        for key, label, _c in compare(mk.key, final["max_position"]):
             row = {"Broker": label + ("  (selected)" if key == broker else "")}
             for v in sizes:
                 c = round_trip(mk.key, key, v)
