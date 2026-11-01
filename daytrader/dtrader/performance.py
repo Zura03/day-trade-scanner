@@ -88,6 +88,11 @@ def strategy_hint(backtest_trades: pd.DataFrame, cfg: dict, active: str | None =
                     f"{lookback} sessions). Run a longer backtest.", table)
     best = eligible["expectancy_R"].idxmax()
     best_exp = eligible.loc[best, "expectancy_R"]
+    if best_exp <= 0:  # never switch into a strategy that is losing money
+        return Hint(active, None, False,
+                    f"No strategy with {min_trades}+ recent trades is making money (best: '{best}' at "
+                    f"{best_exp:+.2f}R per trade). Staying with '{active}' - consider sitting out or trading smaller.",
+                    table)
     if active not in eligible.index:
         return Hint(active, best, best != active,
                     f"'{active}' has too few recent trades to judge. Best lately: "
