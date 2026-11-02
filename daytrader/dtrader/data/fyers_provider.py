@@ -16,6 +16,9 @@ of the day. So:
 - calls are counted per day (data/india/fyers_calls.json) and stop at 4,500;
 - today's 1-minute bars are refetched only as often as the remaining budget
   allows over the rest of the session (about every 2-3 minutes for 30 stocks);
+- today's bars and live quotes are shared on disk between the dashboard and
+  the monitor (separate processes), so a stock fetched by one is reused by the
+  other and an open dashboard with auto-refresh adds almost no calls;
 - bulk daily bars (average volume for ~220 F&O stocks) and past days' minute
   bars beyond the budget come from Yahoo instead.
 """
@@ -36,7 +39,7 @@ import httpx
 import pandas as pd
 
 from ..markets import INDIA, india_fo_symbols
-from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, rank_movers
+from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, rank_movers, read_cache
 
 API = "https://api-t1.fyers.in/api/v3"
 DATA_API = "https://api-t1.fyers.in/data"
@@ -49,6 +52,8 @@ DAILY_BUDGET = 4500        # of the 5,000/day allowed
 LIVE_RESERVE = 2500        # past-day history may not eat into this before/during the session
 MAX_LIVE_RATE = 30         # today's-bars refetches per minute, at most
 CALLS_PATH = INDIA.path("fyers_calls.json")
+QUOTE_TTL = 150            # seconds a shared quote snapshot is reused (movers don't need fresher)
+SHARED_DIR = CACHE_DIR / "fyers" / "shared"
 
 
 def fyers_keys() -> tuple[str, str] | None:
@@ -283,20 +288,46 @@ class FyersProvider(DataProvider):
             prior = d[d.index.date < today]  # today's bar is partial
             if len(prior):
                 avg[s] = float(prior["volume"].tail(10).mean())
-        rows = []
-        for i in range(0, len(symbols), 50):
-            d = self._get("/quotes", {"symbols": ",".join(fyers_symbol(s) for s in symbols[i:i + 50])})
-            for q in d.get("d") or []:
-                v = q.get("v") or {}
-                if q.get("s") != "ok" or not v.get("lp"):
-                    continue
-                s = q["n"].split(":", 1)[1].removesuffix("-EQ")
-                rows.append({"symbol": s, "last": float(v["lp"]),
-                             "prev_close": float(v.get("prev_close_price") or 0),
-                             "volume": float(v.get("volume") or 0), "avg_volume": avg.get(s, 0.0)})
+        snap = self._shared_quotes(symbols)
+        rows = [{"symbol": s, "last": q[1], "prev_close": q[2], "volume": q[3], "avg_volume": avg.get(s, 0.0)}
+                for s, q in snap.items()]
         if not rows:
             raise RuntimeError("Fyers returned no prices (token expired or API down)")
         return pd.DataFrame(rows).set_index("symbol")
+
+    def _shared_quotes(self, symbols: list[str]) -> dict[str, list]:
+        """{symbol: [fetched at, last, prev_close, volume]}, reusing quotes any
+        process fetched in the last QUOTE_TTL seconds and fetching the rest."""
+        SHARED_DIR.mkdir(parents=True, exist_ok=True)
+        path = SHARED_DIR / f"quotes_{INDIA.now().date()}.json"
+        with open(SHARED_DIR / "quotes.lock", "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)  # one process fetches; the other waits and reuses
+            if not path.exists():  # first fetch of the day: clear earlier days' shared files
+                for old in SHARED_DIR.iterdir():
+                    if old.suffix in (".json", ".pkl") and str(INDIA.now().date()) not in old.name:
+                        old.unlink(missing_ok=True)
+            try:
+                snap = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                snap = {}
+            now = _time.time()
+            stale = [s for s in symbols if s not in snap or snap[s][0] < now - QUOTE_TTL]
+            try:
+                for i in range(0, len(stale), 50):
+                    d = self._get("/quotes", {"symbols": ",".join(fyers_symbol(s) for s in stale[i:i + 50])})
+                    for q in d.get("d") or []:
+                        v = q.get("v") or {}
+                        if q.get("s") == "ok" and v.get("lp"):
+                            snap[q["n"].split(":", 1)[1].removesuffix("-EQ")] = [
+                                now, float(v["lp"]), float(v.get("prev_close_price") or 0),
+                                float(v.get("volume") or 0)]
+            except BudgetExhausted:
+                pass  # serve the last quotes we have
+            finally:
+                tmp = path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(snap))
+                tmp.replace(path)
+        return {s: snap[s] for s in symbols if s in snap}
 
     def movers(self, limit: int = 50) -> list[str]:
         return rank_movers(self.quotes(self.all_symbols()), limit)
@@ -318,15 +349,28 @@ class FyersProvider(DataProvider):
             except BudgetExhausted:
                 return self._yahoo_provider().intraday(symbol, day)
         self._asked[symbol] = _time.time()
+        every = self._refresh_every()
         hit = self._today.get(symbol)
-        if hit and hit[0] > _time.time() - self._refresh_every():
+        if hit and hit[0] > _time.time() - every:
             return hit[1]
-        try:
-            bars = super().intraday(symbol, day)
-        except BudgetExhausted:
-            if hit:
-                return hit[1]
-            raise
+        SHARED_DIR.mkdir(parents=True, exist_ok=True)
+        path = SHARED_DIR / f"{symbol}_{day}.pkl"  # today's bars fetched by any process
+        with open(SHARED_DIR / f"{symbol}.lock", "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)  # if the other process is fetching this stock, wait and reuse it
+            if path.exists() and path.stat().st_mtime > _time.time() - every:
+                if (shared := read_cache(path)) is not None:
+                    self._today[symbol] = (path.stat().st_mtime, shared)
+                    return shared
+            try:
+                bars = super().intraday(symbol, day)
+            except BudgetExhausted:
+                stale = hit[1] if hit else read_cache(path) if path.exists() else None
+                if stale is not None:
+                    return stale
+                raise
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            bars.to_pickle(tmp)
+            tmp.replace(path)
         self._today[symbol] = (_time.time(), bars)
         return bars
 

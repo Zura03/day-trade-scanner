@@ -104,6 +104,16 @@ of the day. The tool keeps well inside that:
   stock, so today's bars are refetched only as often as the remaining budget
   allows: with 30 candidates, about every 2 minutes. A signal can show up to
   about 2 minutes later than with an unlimited feed;
+- the dashboard and the monitor share what they fetch: today's minute charts
+  and live quotes (reused for 2.5 minutes) are saved to disk, and a stock one
+  of them just fetched is reused by the other. Leaving the dashboard open with
+  **Auto-refresh every 60 s** on adds almost nothing: measured, the monitor and
+  an auto-refreshing dashboard together use about 14 calls a minute, and the
+  pacing slows itself to make the budget last to the close. The first time a
+  stock becomes buyable, its odds need its last 20 days of minute charts (up
+  to 20 calls, once; they're kept on disk);
+- don't run a second dashboard (`./run.sh`) next to the always-on one: it's
+  a duplicate and shares the same budget;
 - average volumes for the ~220 F&O stocks come from one Yahoo batch download
   instead of 220 Fyers calls, and backtest history before the open may not use
   more than 2,000 calls, keeping the rest for the session.
