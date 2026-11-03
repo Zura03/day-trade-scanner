@@ -137,6 +137,19 @@ def cmd_backtest(cfg, args):
     print(f"\nSaved all trades to {trades_csv(cfg['market']).relative_to(ROOT)}")
 
 
+def cmd_research(cfg, args):
+    from dtrader.research import report, run_study
+
+    rrs = tuple(float(x) for x in args.rr.split(","))
+    study = run_study(provider(cfg, args), cfg, days=args.days, rrs=rrs,
+                      log=lambda m: print(m, file=sys.stderr))
+    text = report(study)
+    print(text)
+    path = cfg["market"].path("research.txt")
+    path.write_text(text + "\n")
+    print(f"\nSaved to {path}")
+
+
 def cmd_hint(cfg, args):
     from dtrader.backtest import load_last_trades, run_backtest
     from dtrader.performance import strategy_hint
@@ -462,6 +475,9 @@ def main():
     s = sub.add_parser("backtest")
     s.add_argument("--days", type=int, default=10); s.add_argument("--strategy", default="all")
     s.add_argument("--symbols", nargs="*"); s.add_argument("--trades", type=int, default=0, help="print last N trades")
+    s = sub.add_parser("research", help="edge check: targets, market-condition filters, walk-forward")
+    s.add_argument("--days", type=int, default=30)
+    s.add_argument("--rr", default="1.5,2,3", help="target R multiples to compare")
     s = sub.add_parser("hint")
     s.add_argument("--refresh", action="store_true", help="re-run the backtest first")
     s.add_argument("--apply", action="store_true", help="switch automatically if suggested")
@@ -483,7 +499,7 @@ def main():
     s.add_argument("id_or_symbol"); s.add_argument("price", type=float)
     args = ap.parse_args()
     cfg = load_config(args.market)
-    {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest,
+    {"strategies": cmd_strategies, "switch": cmd_switch, "scan": cmd_scan, "backtest": cmd_backtest, "research": cmd_research,
      "hint": cmd_hint, "monitor": cmd_monitor, "auth": cmd_auth, "buy": cmd_buy,
      "positions": cmd_positions, "sync": cmd_sync, "today": cmd_today, "sell": cmd_sell, "risk": cmd_risk, "budget": cmd_budget}[args.cmd](cfg, args)
 

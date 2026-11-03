@@ -25,10 +25,12 @@ from .markets import US, Market, get_market
 from .performance import journal_path
 from .scanner import analyse, gather_candidates, session_day
 from .strategies import MAX_CHASE_R, Position, Strategy, get_strategy
-COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "WATCH": "\033[1;33m", "INFO": "\033[1;36m"}
+COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "STOP": "\033[1;31m", "WATCH": "\033[1;33m",
+          "INFO": "\033[1;36m"}
 NTFY_STYLE = {  # priority, emoji tag
     "BUY": ("high", "chart_with_upwards_trend"),
     "SELL": ("high", "money_with_wings"),
+    "STOP": ("high", "warning"),        # stop-loss order missing / leftover in Fyers
     "WATCH": ("default", "eyes"),
     "INFO": ("low", "information_source"),
 }
@@ -47,7 +49,7 @@ def push_ntfy(kind: str, title: str, body: str, cfg: dict) -> bool:
     secret, so it lives in .env as NTFY_TOPIC, not in config.yaml."""
     a = cfg.get("alerts", {})
     topic = os.environ.get("NTFY_TOPIC")
-    if not topic or kind not in a.get("ntfy_kinds", ["BUY", "SELL", "WATCH", "INFO"]):
+    if not topic or kind not in a.get("ntfy_kinds", ["BUY", "SELL", "STOP", "WATCH", "INFO"]):
         return False
     prio, tag = NTFY_STYLE.get(kind, ("default", "bell"))
     try:
@@ -74,7 +76,7 @@ def notify(kind: str, title: str, body: str, cfg: dict) -> None:
             subprocess.run(["osascript", "-e",
                             f'display notification "{esc(body)}" with title "{esc(_title(kind, title, m))}"'],
                            capture_output=True)
-        if a.get("sound", True) and kind in ("BUY", "SELL"):
+        if a.get("sound", True) and kind in ("BUY", "SELL", "STOP"):
             snd = "Glass" if kind == "BUY" else "Basso"
             subprocess.Popen(["afplay", f"/System/Library/Sounds/{snd}.aiff"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -153,16 +155,22 @@ class Monitor:
         self._save()
 
     def _sync_broker(self) -> None:
-        """Record buys/sells made in the Fyers app (India, once logged in)."""
+        """Record buys/sells made in the Fyers app and check their stop-loss
+        orders (India, once logged in). Each stop problem is pushed once."""
         from . import broker_sync
 
         if not broker_sync.enabled(self.cfg):
             return
         try:
-            for msg in broker_sync.sync(self.cfg):
-                notify("INFO", "Fyers trade recorded", msg, self.cfg)
+            msgs, issues = broker_sync.sync_and_check(self.cfg)
         except Exception as e:
             print(f"Fyers trade sync failed: {e}", file=sys.stderr, flush=True)
+            return
+        for msg in msgs:
+            notify("INFO", "Fyers trade recorded", msg, self.cfg)
+        for i in issues:
+            if not self._seen(i.key):
+                notify("STOP", i.title, i.body, self.cfg)
 
     def _evaluate_mine(self) -> list:
         """[(row, Advice)] for your recorded positions (read-only on the file)."""

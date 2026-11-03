@@ -198,7 +198,7 @@ def _session_minutes_left() -> float:
 
 
 def fyers_symbol(s: str) -> str:
-    return f"NSE:{s}-EQ"
+    return s if ":" in s else f"NSE:{s}-EQ"   # full names (NSE:NIFTY50-INDEX) pass through
 
 
 class FyersProvider(DataProvider):

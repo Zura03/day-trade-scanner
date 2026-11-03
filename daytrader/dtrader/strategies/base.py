@@ -187,8 +187,28 @@ class Strategy:
             return None
         if target is None:
             target = entry + self.rr * (entry - stop)
-        return Signal(ctx.symbol, self.name, ts, round(entry, 4), round(stop, 4),
-                      round(target, 4), reason)
+        sig = Signal(ctx.symbol, self.name, ts, round(entry, 4), round(stop, 4), round(target, 4), reason)
+        return sig if self.fees_ok(sig) else None
+
+    def fee_r(self, s: Signal) -> float | None:
+        """Round-trip broker fees and taxes as a fraction of the trade's risk
+        (0.3 = a stop-out costs 1.3R). None if it can't be sized."""
+        from ..costs import round_trip
+
+        shares = self.position_size(s)
+        if shares <= 0 or s.risk <= 0:
+            return None
+        cost = round_trip(self.market.key, self.risk_cfg.get("broker"), shares * s.entry).total
+        return cost / (shares * s.risk)
+
+    def fees_ok(self, s: Signal) -> bool:
+        """Skip setups whose stop is so tight that fees eat more than
+        `risk.max_fee_r` of the risk (tight stops + fixed costs = a loser)."""
+        cap = self.risk_cfg.get("max_fee_r")
+        if not cap:
+            return True
+        f = self.fee_r(s)
+        return f is None or f <= float(cap)
 
     def regular_rows(self, df: pd.DataFrame) -> np.ndarray:
         return np.flatnonzero(df["regular"].to_numpy())

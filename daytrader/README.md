@@ -24,6 +24,7 @@ re-checks every morning which of 13 strategies has been working.
 [Daily capital and costs](#daily-capital-and-costs) ·
 [Risk limits](#daily-risk-limits) ·
 [Strategy switching](#strategy-switching) ·
+[Edge check](#edge-check) ·
 [Automation and alerts](#running-automatically-and-alerts) ·
 [Phone access](#open-the-dashboard-from-your-phone) ·
 [India](#india-whats-different) ·
@@ -201,6 +202,7 @@ dashboard does the same things.
 | `switch <strategy>` / `strategies` | Change or list strategies. |
 | `backtest --days 30 [--strategy x] [--trades N]` | Replay recent sessions. |
 | `hint [--refresh] [--apply]` | Which strategy is working lately; optionally switch. |
+| `research [--days 30] [--rr 1.5,2,3]` | Edge check: targets, market-condition filters and the switch hint replayed day by day. Saved to `data/[india/]research.txt`. |
 | `monitor [--once] [--session]` | Live alerts (`--session`: the daily job's mode). |
 | `buy SYMBOL SHARES PRICE [--stop --target --strategy]` | Record a buy (default stop 2% below, target 2R above). |
 | `positions` | Your positions: HOLD or SELL NOW and why. |
@@ -382,7 +384,22 @@ seconds) read your Fyers tradebook and record each fill:
   ignored.
 
 You get a phone push for each recorded trade. `./run.sh --market india sync`
-does the same once from the terminal. The tradebook is a user-info API with
+does the same once from the terminal.
+
+**Stop-loss check.** The same sync also reads your Fyers **order book** and
+compares it with what you hold today. You get a **STOP** push (high priority,
+once per problem) and a red banner in the dashboard when:
+
+| Problem | What to do |
+|---|---|
+| You bought a stock (2+ minutes ago) and there's no pending stop-loss sell for it | Place an SL-M sell for those shares at the tool's stop, Intraday |
+| The stop-loss covers fewer shares than you hold (e.g. you added to the position) | Change its quantity |
+| The stop-loss trigger is below the tool's stop | Move it up, or accept losing more than planned |
+| A stop-loss is still pending for a stock you no longer hold today | Cancel it, or it can sell shares you don't have (a short) |
+
+SL-M and SL-L orders both count; delivery (CNC) stop-losses on shares you
+already owned are left alone. It's read-only: the tool never places, changes
+or cancels an order. Turn it off with `india.fyers.stop_check: false`. The tradebook is a user-info API with
 its own 100,000-calls-a-day limit, so it doesn't use the 5,000 data calls.
 Turn it off with `india.fyers.sync_trades: false`.
 
@@ -426,6 +443,17 @@ backtest trade at its real size. On small trades the broker matters a lot:
 |---|---|---|---|
 | Groww (0.1%, ₹5 minimum per order) | ₹12.69 (0.51%) | ₹13.57 (0.27%) | ₹56.07 (0.22%) |
 | Zerodha / Dhan / Fyers (0.03%) | ₹2.66 (0.11%) | ₹5.31 (0.11%) | ₹26.51 (0.11%) |
+
+**Fee filter (India):** costs are about 0.1% of the trade value with Fyers,
+so a stop 0.3% below the entry pays a third of its risk in fees before the
+price moves. `india.risk.max_fee_r: 0.15` skips setups whose fees would be
+more than 0.15R, which in practice means the stop must be at least about 0.7%
+below the entry. In the [edge check](#edge-check) (52 sessions) the skipped
+trades lost heavily (−0.76R and −0.65R per trade in the two halves) and the
+kept ones much less (−0.28R, −0.02R): it cuts losses, it doesn't create an
+edge. It applies to BUY NOW, alerts and the
+backtest alike. A bigger daily capital doesn't change this: fees grow with the
+trade size. Set `null` to turn it off.
 
 In a 15-session India backtest at ₹5,000 a day, Groww's fees cost about 0.25R
 per trade. Gap & Go fell from +0.33R with Fyers fees to +0.07R with Groww's,
@@ -480,6 +508,41 @@ open: it gapped by at least the minimum move, or ran 20%+ the day before. The
 backtest charges slippage per side (US 0.1%, India 0.05%), plus India's
 broker and statutory fees at each trade's real size, and skips today until the
 session has closed.
+
+## Edge check
+
+`./run.sh research --days 40` (or `--market india`) asks whether any of this
+makes money, using only information a trader would have had at the time:
+
+1. **Targets:** every strategy replayed with targets at 1.5R, 2R and 3R.
+2. **Market conditions:** each backtest trade is tagged with what the index
+   (SPY / Nifty 50) was doing just before entry: above its open, above
+   yesterday's close, in a 20-day uptrend, VIX calm, plus the fee rule above.
+3. **Walk-forward:** a rule only passes if the trades it keeps beat the ones
+   it drops in the first 60% of sessions **and** in the rest, and the kept
+   ones make money in the later part. The switch hint is replayed day by day,
+   each pick made from the previous sessions only, to show what following it
+   would have earned.
+
+The backtest's saved trades (which feed the switch hint) aren't touched.
+
+**Results on 2026-11-03** (US: 40 sessions, ~4,400 trades; India: 52
+sessions from Fyers data, ~760 trades):
+
+| | US | India |
+|---|---|---|
+| All strategies, every trade | −0.07R per trade | −0.49R per trade |
+| Fees per trade | ~0 | 0.27R |
+| Best target | no clear winner (1.5R, 2R, 3R within 0.02R) | no clear winner (within 0.03R) |
+| Market-condition filters | none passed; longs did slightly *better* on down-index days lately | none passed |
+| Fee filter (≤ 0.15R) | not needed | cuts the loss to −0.15R per trade; now on |
+| Following the switch hint day by day | **+0.10R per trade, +15.7R over 164 trades** | sat out most days; −16.3R over the 22 trades it took |
+
+So: in the US, sticking with whichever strategy worked lately beat trading
+everything, mostly through Gap & Go. In India no strategy made money in both
+halves with enough trades to count (Red to Green and Oversold Bounce were
+positive on 13 and 6 trades, too few to trust), so paper trade it for now. A month of data
+is a small sample; rerun it every week or two.
 
 ## Running automatically and alerts
 

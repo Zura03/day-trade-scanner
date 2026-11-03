@@ -106,7 +106,8 @@ def _mover_days(d: pd.DataFrame, sessions: list[date], u: dict, min_avg_vol: flo
 
 
 def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
-                 days: int = 10, symbols: list[str] | None = None, log=print) -> pd.DataFrame:
+                 days: int = 10, symbols: list[str] | None = None, log=print,
+                 save: bool = True) -> pd.DataFrame:
     """Universe modes (config backtest.universe):
       market - every listed stock that gapped that day (needs a source that can
                list all symbols, e.g. Alpaca). No bias toward today's movers.
@@ -187,7 +188,8 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
     trades = pd.DataFrame(rows)
     if len(trades):
         trades = trades.sort_values(["day", "entry_time"]).reset_index(drop=True)
-        trades.to_csv(trades_csv(provider.market), index=False)
+        if save:  # research runs leave the switch hint's trades alone
+            trades.to_csv(trades_csv(provider.market), index=False)
     return trades
 
 

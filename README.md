@@ -107,10 +107,11 @@ daytrader/
     scanner.py          finds and ranks today's movers, BUY NOW logic
     backtest.py         market-wide replay of recent sessions
     performance.py      strategy-switch hint
+    research.py         edge check: targets, market filters, walk-forward
     odds.py             setup odds (reach simulation + track record)
     news.py             headlines and earnings dates
     portfolio.py        your positions, sell advice, daily risk limits
-    broker_sync.py      records your Fyers buys/sells as positions
+    broker_sync.py      records your Fyers buys/sells, checks your stop-losses
     costs.py            broker + statutory fees per trade
     alerts.py           live monitor, phone and desktop notifications
     ui.py               dashboard design tokens and components

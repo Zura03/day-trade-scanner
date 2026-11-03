@@ -93,7 +93,7 @@ alerts:
   sound: true
   # Phone push via the free ntfy app: set NTFY_TOPIC in .env, then subscribe
   # to that topic in the app. Which alert kinds to push:
-  ntfy_kinds: [BUY, SELL, WATCH, INFO]   # INFO = stop moves, start/finish
+  ntfy_kinds: [BUY, SELL, STOP, WATCH, INFO]   # STOP = stop-loss order problem in Fyers, INFO = stop moves, start/finish
   ntfy_server: https://ntfy.sh
 
 backtest:
@@ -119,6 +119,7 @@ india:
     redirect_url: http://127.0.0.1:5011/fyers  # set the same URL in your Fyers app
     sync_trades: true          # record buys/sells made in the Fyers app as positions
     default_stop_pct: 1.0      # stop for a buy that matches no recent setup (target = 2R)
+    stop_check: true           # warn when a stock you hold has no stop-loss order in Fyers (read-only)
 
   active_strategy: gap_and_go
 
@@ -150,6 +151,11 @@ india:
 
   risk:
     reward_risk: 2.0          # account size / risk per trade come from `capital` above
+    # Skip setups whose fees + taxes would be more than this share of the risk.
+    # Costs are ~0.1% of the trade value, so this means "stop at least ~0.7%
+    # below the entry". The edge check (`research`) found these tight-stop
+    # trades lost heavily (-0.7R) and the rest much less (-0.15R). null = off.
+    max_fee_r: 0.15
 
   exits:
     trail_after_r: 1.0

@@ -1,6 +1,7 @@
 """Streamlit dashboard:  streamlit run dashboard.py"""
 from __future__ import annotations
 
+import html
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -191,12 +192,14 @@ def sync_broker() -> None:
         return
     st.session_state["broker_sync_at"] = _t.time()
     try:
-        for msg in broker_sync.sync(cfg):
-            st.toast(msg)
+        msgs, issues = broker_sync.sync_and_check(cfg)
     except Exception as e:
         st.session_state["broker_sync_error"] = str(e)[:120]
     else:
         st.session_state.pop("broker_sync_error", None)
+        st.session_state["stop_issues"] = issues
+        for msg in msgs:
+            st.toast(msg)
 
 
 def my_advice() -> list[tuple[dict, object]]:
@@ -393,6 +396,14 @@ def picks():
         st.caption(f"Headlines unavailable: {str(e)[:80]}")
 
 
+def stop_banner() -> None:
+    """Stop-loss problems found in your Fyers order book (broker_sync.stop_issues)."""
+    issues = st.session_state.get("stop_issues") or []
+    if issues:
+        st.markdown(ui.banner("<b>Check your stop-loss orders in Fyers</b> · " + " ".join(
+            f"<b>{html.escape(i.title)}.</b> {html.escape(i.body)}" for i in issues)), unsafe_allow_html=True)
+
+
 ADVICE = my_advice()  # once per page load: evaluating fetches prices
 from dtrader.portfolio import risk_status  # noqa: E402
 
@@ -404,6 +415,7 @@ with tab_picks:
         st.markdown(ui.banner("<b>Sell now</b> · " + "; ".join(
             f"{r['shares']} {r['symbol']} - {a.reason}" for r, a in _sell) + ". Record the sale in My positions."),
             unsafe_allow_html=True)
+    stop_banner()
     if RISK.blocked:
         st.markdown(ui.notice("<b>BUY alerts paused for today</b> · " + "; ".join(RISK.breaches)
                               + ". Sell alerts keep working. Limits: <code>risk_limits</code> in config.yaml."),
@@ -418,6 +430,7 @@ with tab_mine:
 
     cur = mk.currency
     advice = ADVICE
+    stop_banner()
     st.markdown(ui.section("Today's limits", "BUY alerts pause when one is reached"), unsafe_allow_html=True)
     st.markdown(ui.tiles([
         ("P&L today", mk.fmt_money(RISK.pnl_today),
