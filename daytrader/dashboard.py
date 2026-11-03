@@ -235,7 +235,7 @@ def candle_chart(cand, sig=None, watch=None, title=""):
         lines.append((ctx.premarket_high, "PM high", ui.SERIES[6], "dot"))
     if sig:
         lines += [(sig.entry, "Entry", ui.INK_2, "dash"), (sig.stop, "Stop", ui.BAD, "dash"),
-                  (sig.target, "Target", ui.GOOD, "dash")]
+                  (sig.target, "Max target", ui.GOOD, "dash")]
         fig.add_trace(go.Scatter(x=[sig.time], y=[sig.entry], mode="markers", name="Signal",
                                  marker=dict(symbol="triangle-up", size=12, color=ui.INK,
                                              line=dict(color=ui.SURFACE, width=2))))
@@ -257,7 +257,8 @@ def candle_chart(cand, sig=None, watch=None, title=""):
 # ---------------- buyable now ---------------------------------------------
 def buyable_section(df: pd.DataFrame, cands: list) -> None:
     """Every setup that is buyable right now, across all strategies, with its odds."""
-    recent = strategy_hint(load_last_trades(mk), cfg, names=names).table
+    bt = load_last_trades(mk)
+    recent = strategy_hint(bt, cfg, names=names).table
     b = buyable_now(df, strategy.name, recent)
     st.markdown(ui.section("Buyable now", f"{len(b)} across all strategies"), unsafe_allow_html=True)
     if b.empty:
@@ -291,6 +292,16 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
                 news.append(news_check(r.symbol, mk))
             except Exception:
                 news.append(None)
+    from dtrader.performance import exit_profile
+
+    profiles = {n: exit_profile(bt, n) for n in set(b["strategy"])}
+
+    def target_hit(n):
+        p = profiles.get(n)
+        if p is None:
+            return "–"
+        return f"{p.share('target'):.0%} of {p.trades}" + ("" if p.scope == n else " (all strategies)")
+
     show = pd.DataFrame({
         "Symbol": b["symbol"],
         "Verdict": [o.verdict if o else "–" for o in odds],
@@ -303,18 +314,27 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
         "Strategy lately": [lately(r) for r in b.itertuples()],
         "Triggered": b["triggered_at"],
         "Entry": b["entry"], "Last": b["last"], "Past entry": b["r_from_entry"],
-        "Stop": b["stop"], "Target": b["target"], "Shares": b["shares"],
+        "Stop": b["stop"], "Max target": b["target"],
+        "Target hit lately": [target_hit(n) for n in b["strategy"]], "Shares": b["shares"],
         "Setup": b["why"],
     })
     money = st.column_config.NumberColumn(format="%.2f")
     st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately"]).map(ui.verdict_cell, subset=["Verdict"])
                  .map(ui.earnings_cell, subset=["Earnings"]),
                  width="stretch", hide_index=True,
-                 column_config={"Entry": money, "Last": money, "Stop": money, "Target": money,
+                 column_config={"Entry": money, "Last": money, "Stop": money, "Max target": money,
                                 "Past entry": st.column_config.NumberColumn(format="%+.2fR"),
                                 "Shares": st.column_config.NumberColumn(format="%d"),
                                 "Setup": st.column_config.TextColumn(width="large"),
                                 "News": st.column_config.TextColumn(width="large")})
+    rr = cfg.get("risk", {}).get("reward_risk", 2)
+    prof = exit_profile(bt, strategy.name)
+    st.caption(f"**Max target** is entry + {rr:g} × risk (Oversold Bounce: the VWAP), a ceiling for the trade, "
+               "not a forecast - the Verdict and Reach columns are the forecast. "
+               + (f"How {strategy.title if prof.scope == strategy.name else 'all strategies'} trades ended in the "
+                  f"last backtest ({prof.trades} trades): {prof.text()}. Most winners exit on the trailing stop "
+                  "(after +1R, a 1-min close below the 9 EMA) or the time exit, not at the target."
+                  if prof else ""))
     st.caption("Earnings today or next session can gap the stock through your stop. News counts headlines since "
                "the previous close - a gap with fresh news (a catalyst) tends to follow through better.")
     st.caption(f"Only your active strategy ({strategy.title}) sends alerts. Reach: from the current price, how "
@@ -355,15 +375,15 @@ def picks():
     ]), unsafe_allow_html=True)
     table = view.rename(columns={"symbol": "Symbol", "status": "Status", "last": "Last", "gap_%": "Gap",
                                  "day_%": "Day", "rel_vol": "Rel vol", "float_M": "Float (M)", "entry": "Entry",
-                                 "stop": "Stop", "target": "Target", "shares": "Shares", "why": "Setup"})
+                                 "stop": "Stop", "target": "Max target", "shares": "Shares", "why": "Setup"})
     table["Strategy"] = [REGISTRY[n].title for n in view["strategy"]]
     cols = ["Symbol", "Strategy", "Status", "Last", "Gap", "Day", "Rel vol"] + \
-        (["Float (M)"] if mk.key == "us" else []) + ["Entry", "Stop", "Target", "Shares", "Setup"]
+        (["Float (M)"] if mk.key == "us" else []) + ["Entry", "Stop", "Max target", "Shares", "Setup"]
     if not compare:
         cols.remove("Strategy")
     money = st.column_config.NumberColumn(format="%.2f")
     pct = st.column_config.NumberColumn(format="%+.1f%%")
-    styled = ui.dash_fill(table[cols], money=["Entry", "Stop", "Target"], whole=["Shares"]).style \
+    styled = ui.dash_fill(table[cols], money=["Entry", "Stop", "Max target"], whole=["Shares"]).style \
         .map(ui.status_cell, subset=["Status"]).map(ui.signed_cell, subset=["Day"])
     st.dataframe(styled,
                  width="stretch", hide_index=True, height=min(560, 38 + 35 * len(view)),
@@ -700,7 +720,8 @@ with tab_guide:
                 st.json({**cls.defaults, **((cfg.get('strategies') or {}).get(n) or {})})
     ex = cfg.get("exits", {})
     st.markdown(
-        f"**Exits (all strategies):** stop loss; target at {cfg.get('risk', {}).get('reward_risk', 2)}R; "
+        f"**Exits (all strategies):** stop loss; max target at {cfg.get('risk', {}).get('reward_risk', 2)}R "
+        "(a ceiling: few trades reach it); "
         f"stop to breakeven at +{ex.get('breakeven_after_r')}R; after +{ex.get('trail_after_r')}R sell on a "
         f"1-min close below the 9 EMA; flat by {ex.get('time_exit')}. No new entries after "
         f"{ex.get('no_new_entries_after')}.")

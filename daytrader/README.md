@@ -346,6 +346,15 @@ same way:
 - time exit: US 15:50 ET, India 15:10 IST;
 - at most 2 trades per stock per day (`exits.max_trades_per_day`).
 
+**The target is a ceiling, not a prediction.** It's plain arithmetic (entry +
+2 × risk; Oversold Bounce uses the VWAP), shown as **Max target**. Few trades
+get there. In the 60-session India backtest only 4% of trades hit the target;
+26% ended on the trailing exit (avg +0.80R, where nearly all the profit came
+from), 31% at the 15:10 time exit (−0.15R) and 34% on the stop (−1.10R). The
+dashboard shows this breakdown for your strategy under **Buyable now**, plus a
+**Target hit lately** column per setup. Whether *today's* move can reach the
+target is the job of the [odds](#setup-odds) verdict ("Target out of reach").
+
 ## Your positions and when to sell
 
 Record each buy in **My positions → Record a buy** (pick a buyable setup to

@@ -111,3 +111,40 @@ def strategy_hint(backtest_trades: pd.DataFrame, cfg: dict, active: str | None =
                 f"Stay with '{active}': {act_exp:+.2f}R per trade lately"
                 + (f" (best alternative '{best}' at {best_exp:+.2f}R)." if best != active else ", the best of all strategies."),
                 table)
+
+
+# ---- how trades actually end ----------------------------------------------------
+EXIT_GROUPS = {"target": "target", "lost 9 EMA": "trailing", "trail stop": "trailing",
+               "time exit": "time exit", "close": "time exit", "stop": "stop", "breakeven": "breakeven"}
+EXIT_LABELS = {"target": "target hit", "trailing": "trailing exit", "time exit": "time exit",
+               "stop": "stopped out", "breakeven": "breakeven"}
+
+
+@dataclass
+class ExitProfile:
+    scope: str          # strategy name, or "all strategies" when it has too few trades
+    trades: int
+    table: pd.DataFrame  # index = exit group: share (0-1), avg_R
+
+    def share(self, group: str) -> float:
+        return float(self.table["share"].get(group, 0.0))
+
+    def text(self) -> str:
+        parts = [f"{EXIT_LABELS[g]} {r.share:.0%} (avg {r.avg_R:+.2f}R)" for g, r in self.table.iterrows()]
+        return " · ".join(parts)
+
+
+def exit_profile(trades: pd.DataFrame, strategy: str | None = None, min_trades: int = 10) -> ExitProfile | None:
+    """Share of backtest trades ending each way (target, trailing, time, stop,
+    breakeven) and their average R. Falls back to all strategies if `strategy`
+    has fewer than `min_trades`."""
+    if trades is None or not len(trades) or "reason" not in trades:
+        return None
+    scope, t = "all strategies", trades
+    if strategy:
+        s = trades[trades["strategy"] == strategy]
+        if len(s) >= min_trades:
+            scope, t = strategy, s
+    g = t.assign(group=t["reason"].map(EXIT_GROUPS).fillna("time exit")).groupby("group")["r"]
+    table = pd.DataFrame({"share": g.size() / len(t), "avg_R": g.mean()}).sort_values("share", ascending=False)
+    return ExitProfile(scope, len(t), table)

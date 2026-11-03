@@ -255,7 +255,7 @@ class Monitor:
             print(f"news {s.symbol}: {e}", file=sys.stderr, flush=True)
         odds += extra
         notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
-               f"stop {s.stop:.2f} / target {s.target:.2f} / {sh} sh "
+               f"stop {s.stop:.2f} / max target {s.target:.2f} / {sh} sh "
                f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{odds}", self.cfg)
         self.state["positions"].append(Position.from_signal(s, sh).to_dict())
         taken[tkey] = taken.get(tkey, 0) + 1
