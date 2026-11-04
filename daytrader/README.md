@@ -251,10 +251,26 @@ Other statuses:
 - **no setup.**
 
 **Buyable now**, at the top of Picks, lists every BUY NOW setup across all 13
-strategies. Your active strategy comes first, then the strategies with the
-best recent R per trade (losing ones in red), then the setups closest to their
-entry. The BUY NOW count and the monitor's BUY alerts cover your **active
-strategy only**.
+strategies, **sorted by Expected R**, with a banner naming the **best one right
+now**, or saying **"Nothing worth buying right now"** when no setup's expected
+R is above zero. The BUY NOW count and the monitor's BUY alerts cover your
+**active strategy only**, so the banner says when the best setup isn't yours.
+
+**Expected R** is what a setup is expected to earn per R risked if you buy at
+the current price, after slippage and fees, using only what's known now
+(`dtrader/ranking.py`):
+
+- the strategy's recent results (backtest plus the monitor's paper trades,
+  both net of costs) are pooled with **this stock's own track record** with
+  that strategy over its last 20 sessions;
+- the pool is shrunk toward zero by 20 trades of "no edge", so 5 lucky
+  trades count for little and 200 trades count for a lot;
+- the move already made past the entry is subtracted: if the trade is
+  expected to end at entry + 0.1R and the price is already +0.3R past the
+  entry, buying now is expected to lose.
+
+The **Why this score** column shows the inputs. The [edge check](#edge-check)
+tests whether the score picks better trades.
 
 ## Setup odds
 
@@ -514,7 +530,7 @@ skip the morning backtest.
 the strongest gappers each day (up to 60 US / 40 India) from the whole market
 or the F&O list. A stock counts as a gapper using only what's known at the
 open: it gapped by at least the minimum move, or ran 20%+ the day before. The
-backtest charges slippage per side (US 0.1%, India 0.05%), plus India's
+backtest charges slippage per side (US 0.1%, India 0.05%, at least one tick), plus India's
 broker and statutory fees at each trade's real size, and skips today until the
 session has closed.
 
@@ -535,23 +551,40 @@ makes money, using only information a trader would have had at the time:
 
 The backtest's saved trades (which feed the switch hint) aren't touched.
 
-**Results on 2026-11-03** (US: 40 sessions, ~4,400 trades; India: 52
+4. **Expected-R score:** each trade is scored from earlier sessions only,
+   then two traders are replayed with one position at a time and the daily
+   trade limit: one always takes the best-scoring setup (only if above zero),
+   the other simply takes the first setup to trigger.
+
+**Costs** are realistic: slippage is 0.1% (US) / 0.05% (India) per side but
+at least one tick (`backtest.min_slippage`: 1 cent, 5 paise). A flat 0.1% made
+$1–2 stocks look about 0.3R better than they are, since a 1-cent spread on a
+$1.50 stock is 0.7%.
+
+**Results on 2026-11-03** (US: 40 sessions, ~4,300 trades; India: 52
 sessions from Fyers data, ~760 trades):
 
 | | US | India |
 |---|---|---|
-| All strategies, every trade | −0.07R per trade | −0.49R per trade |
+| All strategies, every trade | −0.20R per trade | −0.49R per trade |
 | Fees per trade | ~0 | 0.27R |
 | Best target | no clear winner (1.5R, 2R, 3R within 0.02R) | no clear winner (within 0.03R) |
-| Market-condition filters | none passed; longs did slightly *better* on down-index days lately | none passed |
+| Market-condition filters | none passed | none passed |
 | Fee filter (≤ 0.15R) | not needed | cuts the loss to −0.15R per trade; now on |
-| Following the switch hint day by day | **+0.10R per trade, +15.7R over 164 trades** | sat out most days; −16.3R over the 22 trades it took |
+| Following the switch hint day by day | about break-even (−0.4R over 142 trades) | sat out most days; −16.3R over the 22 trades it took |
+| Expected-R score above zero vs below | **passes**: −0.03R / +0.04R kept vs −0.26R / −0.18R dropped | fails |
+| Best-score trader vs first-setup trader | −0.01R vs −0.10R per trade (72 vs 86 trades) | +0.07R vs +0.17R (33 vs 59 trades) |
 
-So: in the US, sticking with whichever strategy worked lately beat trading
-everything, mostly through Gap & Go. In India no strategy made money in both
-halves with enough trades to count (Red to Green and Oversold Bounce were
-positive on 13 and 6 trades, too few to trust), so paper trade it for now. A month of data
-is a small sample; rerun it every week or two.
+US results by share price, with the realistic costs: $1–2 −0.31R, $2–5
+−0.19R, $5–10 −0.09R, $10–20 −0.19R per trade.
+
+So: nothing here has a proven edge after realistic costs. In the US the score
+does its job as a filter, steering away from the setups that lose most and
+landing near break-even, but not into profit; the cheapest stocks are the
+worst. In India the score doesn't help; taking the first fee-filtered setup
+of the day did better on 59 trades, too few to trust. Paper trade both for
+now, and rerun this every week or two: a month or two of data is a small
+sample.
 
 ## Running automatically and alerts
 

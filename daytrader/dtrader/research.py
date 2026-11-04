@@ -260,6 +260,90 @@ def walk_forward(trades: pd.DataFrame, lookback: int = 10, min_trades: int = 10,
     return WalkForward(picks, _score(took["r"]), _score(later["r"]))
 
 
+# ---- does the expected-R score pick better trades? -------------------------------
+def score_trades(trades: pd.DataFrame, lookback: int = 10, stock_sessions: int = 20) -> pd.DataFrame:
+    """Each trade's expected-R score (ranking.py) from earlier sessions only:
+    the strategy's trades in the previous `lookback` sessions and this
+    stock's trades with that strategy in the previous `stock_sessions`.
+    Backtest fills are at the entry, so there's no chase term. Trades
+    before `lookback` sessions of history get no score."""
+    from .ranking import edge
+
+    days = sorted(trades["day"].unique())
+    out = []
+    for i in range(lookback, len(days)):
+        d = days[i]
+        past = trades[trades["day"].isin(days[i - lookback:i])]
+        strat = past.groupby("strategy")["r"].agg(["mean", "count"])
+        spast = trades[trades["day"].isin(days[max(0, i - stock_sessions):i])]
+        stock = spast.groupby(["symbol", "strategy"])["r"].agg(["mean", "count"])
+        today = trades[trades["day"] == d].copy()
+        sc = []
+        for r in today.itertuples():
+            a = strat.loc[r.strategy] if r.strategy in strat.index else None
+            k = stock.loc[(r.symbol, r.strategy)] if (r.symbol, r.strategy) in stock.index else None
+            sc.append(edge(a["mean"] if a is not None else None, int(a["count"]) if a is not None else 0,
+                           k["mean"] if k is not None else None, int(k["count"]) if k is not None else 0))
+        today["score"] = sc
+        out.append(today)
+    return pd.concat(out) if out else trades.iloc[0:0].assign(score=[])
+
+
+def pick_one_at_a_time(scored: pd.DataFrame, max_per_day: int, use_score: bool = True) -> pd.DataFrame:
+    """Replay a trader with one position at a time and `max_per_day` trades:
+    whenever flat, take the best-scoring setup triggering at that minute
+    (only if its score is positive), or with use_score=False simply the first
+    setup to trigger. Returns the trades taken."""
+    taken = []
+    for _, day in scored.groupby("day"):
+        day = day.assign(t=pd.to_datetime(day["entry_time"]), x=pd.to_datetime(day["exit_time"]))
+        day = day.sort_values(["t", "score"], ascending=[True, False]) if use_score else \
+            day.sort_values(["t", "symbol"])  # baseline: no peeking at the score
+        busy, n = None, 0
+        for r in day.itertuples():
+            if n >= max_per_day:
+                break
+            if busy is not None and r.t < busy:
+                continue
+            if use_score and not r.score > 0:
+                continue
+            taken.append(r.Index)
+            busy, n = r.x, n + 1
+    return scored.loc[taken]
+
+
+@dataclass
+class ScoreCheck:
+    rule: RuleResult             # score > 0 kept vs dropped, both halves
+    picker: dict                 # best-score trader
+    first: dict                  # first-setup trader (no score), same limits
+    every: dict                  # every scored trade
+    picker_early: dict
+    picker_late: dict
+    first_early: dict
+    first_late: dict
+
+
+def score_check(trades: pd.DataFrame, lookback: int, max_per_day: int, train: list[date],
+                test: list[date]) -> ScoreCheck | None:
+    s = score_trades(trades, lookback)
+    if not len(s):
+        return None
+    keep = s["score"] > 0
+    early, late = s["day"].isin(train), s["day"].isin(test)
+    rule = RuleResult("score_positive", "expected-R score above zero",
+                      _score(s[keep & early]["r"]), _score(s[~keep & early]["r"]),
+                      _score(s[keep & late]["r"]), _score(s[~keep & late]["r"]), False)
+    rule.passes = all(x["trades"] >= 10 for x in (rule.kept_early, rule.kept_late)) and \
+        (rule.kept_early["avg_R"] or 0) > (rule.dropped_early["avg_R"] if rule.dropped_early["trades"] else -math.inf) and \
+        (rule.kept_late["avg_R"] or 0) > (rule.dropped_late["avg_R"] if rule.dropped_late["trades"] else -math.inf) and \
+        (rule.kept_late["avg_R"] or 0) > 0
+    pk, fi = pick_one_at_a_time(s, max_per_day), pick_one_at_a_time(s, max_per_day, use_score=False)
+    half = lambda t, d: _score(t[t["day"].isin(d)]["r"])  # noqa: E731
+    return ScoreCheck(rule, _score(pk["r"]), _score(fi["r"]), _score(s["r"]),
+                      half(pk, train), half(pk, test), half(fi, train), half(fi, test))
+
+
 # ---- the whole study ----------------------------------------------------------
 @dataclass
 class Study:
@@ -269,6 +353,7 @@ class Study:
     rules: list[RuleResult]
     hint: WalkForward
     hint_with_rule: dict[str, WalkForward]
+    score: ScoreCheck | None
     untagged: int
     verdict: list[str]
 
@@ -311,6 +396,10 @@ def run_study(provider, cfg: dict, days: int = 30, rrs: tuple[float, ...] = (1.5
     mt = int(sh.get("min_trades", 5))
     hint = walk_forward(tagged, lb, mt)
     with_rule = {r.name: walk_forward(tagged, lb, mt, r.name) for r in rules if r.passes}
+    # the score is checked on the trades you'd actually see: with the configured fee filter
+    live = tagged if not cfg.get("risk", {}).get("max_fee_r") else tagged[tagged["fee_R"] <= FEE_CAP]
+    per_day = int((cfg.get("risk_limits") or {}).get("max_trades_per_day") or 3)
+    sc = score_check(live, lb, per_day, train, test)
 
     v = []
     rrt = rr_table(by_rr, train, test).loc["ALL"]
@@ -329,8 +418,14 @@ def run_study(provider, cfg: dict, days: int = 30, rrs: tuple[float, ...] = (1.5
         g = wf.follow
         if g["trades"]:
             v.append(f"  ...with '{name}': {g['trades']} trades, {g['avg_R']:+.3f}R per trade, {g['total_R']:+.1f}R total.")
+    if sc:
+        p, f = sc.picker, sc.first
+        fmt = lambda x: f"{x['trades']} trades, {x['avg_R']:+.3f}R per trade" if x["trades"] else "no trades"  # noqa: E731
+        v.append(f"Expected-R score: {'PASSES' if sc.rule.passes else 'does not pass'} the both-halves test. "
+                 f"Taking the best-scoring setup, one at a time, up to {per_day} a day: {fmt(p)}; "
+                 f"taking the first setup instead: {fmt(f)}.")
     return Study(provider.market, (session_days[0], session_days[-1], len(session_days)),
-                 rr_table(by_rr, train, test), rules, hint, with_rule, untagged, v)
+                 rr_table(by_rr, train, test), rules, hint, with_rule, sc, untagged, v)
 
 
 def report(s: Study) -> str:
@@ -348,6 +443,19 @@ def report(s: Study) -> str:
         for label, k, d in (("early", r.kept_early, r.dropped_early), ("late ", r.kept_late, r.dropped_late)):
             fmt = lambda x: f"{x['trades']:>4} trades {x['avg_R']:+.3f}R" if x["trades"] else "   0 trades"  # noqa: E731
             lines.append(f"      {label}: kept {fmt(k)} | dropped {fmt(d)}")
+    if s.score:
+        c = s.score
+        fmt = lambda x: f"{x['trades']:>4} trades {x['avg_R']:+.3f}R" if x["trades"] else "   0 trades"  # noqa: E731
+        lines += ["", "== Expected-R score (from earlier sessions only), on the trades you'd see =="]
+        r = c.rule
+        lines.append(f"{'PASS' if r.passes else 'fail'}  score above zero")
+        for label, k, d in (("early", r.kept_early, r.dropped_early), ("late ", r.kept_late, r.dropped_late)):
+            lines.append(f"      {label}: kept {fmt(k)} | dropped {fmt(d)}")
+        lines.append(f"Best-score trader (one at a time): early {fmt(c.picker_early)} | late {fmt(c.picker_late)} "
+                     f"| all {fmt(c.picker)}")
+        lines.append(f"First-setup trader (no score):     early {fmt(c.first_early)} | late {fmt(c.first_late)} "
+                     f"| all {fmt(c.first)}")
+        lines.append(f"Every scored trade: {fmt(c.every)}")
     lines += ["", "== Switch hint replayed day by day (pick from previous sessions only) =="]
     lines.append(s.hint.picks.to_string(index=False) if len(s.hint.picks) else "(not enough sessions)")
     e = s.hint.everything

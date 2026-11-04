@@ -98,6 +98,7 @@ alerts:
 
 backtest:
   slippage_pct: 0.1          # per side, small caps have wide spreads
+  min_slippage: 0.01         # ...but at least one tick ($0.01) per side: 0.7% on a $1.50 stock
   # market: every listed stock that gapped each day (Alpaca). seen: only
   # symbols from scan history / watchlist / today's movers.
   universe: market
@@ -201,6 +202,7 @@ india:
 
   backtest:
     slippage_pct: 0.05        # per side, price slippage only - broker fees come from `broker`
+    min_slippage: 0.05        # at least one NSE tick (5 paise) per side
     universe: market          # every F&O stock that gapped each day
     min_avg_volume: 200000
     max_symbols_per_day: 40

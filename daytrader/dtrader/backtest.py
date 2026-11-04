@@ -38,10 +38,26 @@ def trades_csv(market: Market = US):
     return market.path("backtest_trades.csv")
 
 
+def trade_costs(cfg: dict, market: Market) -> dict:
+    """simulate_day's cost arguments from config: slippage per side as a % of
+    price with a floor of `min_slippage` (one tick: on a $1.50 stock a 1-cent
+    spread is 0.7%, far more than a flat 0.1%), the broker's fees and the
+    minimum share count. Shared by the backtest and the odds track record."""
+    from .costs import round_trip
+
+    bt = cfg.get("backtest") or {}
+    broker = cfg.get("broker")
+    return {"slippage": float(bt.get("slippage_pct", 0.1)) / 100,
+            "tick": float(bt.get("min_slippage", 0.01)),
+            "fees": lambda v: round_trip(market.key, broker, v),
+            "min_shares": int((cfg.get("derived") or {}).get("min_shares", 1))}
+
+
 def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.001,
-                 fees=None, min_shares: int = 1) -> list[Position]:
-    """Replay one session. With `fees` (value -> costs.Cost) the trade is sized
-    in real shares: setups you couldn't buy `min_shares` of are skipped, and the
+                 fees=None, min_shares: int = 1, tick: float = 0.0) -> list[Position]:
+    """Replay one session. Slippage is `slippage` of the price per side, at
+    least `tick`. With `fees` (value -> costs.Cost) the trade is sized in real
+    shares: setups you couldn't buy `min_shares` of are skipped, and the
     broker + statutory charges are folded into the entry and exit prices."""
     trades: list[Position] = []
     max_trades = strategy.max_trades_per_day
@@ -61,7 +77,7 @@ def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.
         if fees is not None and shares < min_shares:
             continue  # unaffordable at this account size: you couldn't have taken it
         p = Position.from_signal(s, shares)
-        p.entry = s.entry * (1 + slippage)
+        p.entry = s.entry + max(s.entry * slippage, tick)
         p.check_entry_bar(df.iloc[i])
         j = i + 1
         while p.is_open and j <= reg_last:
@@ -69,7 +85,7 @@ def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.
             j += 1
         if p.is_open:
             p._close(df.index[reg_last], df["close"].iat[reg_last], "close")
-        p.exit_price *= (1 - slippage)
+        p.exit_price -= max(p.exit_price * slippage, tick)
         if fees is not None and shares > 0:
             c = fees(shares * p.entry)
             p.entry += c.buy_side / shares
@@ -115,14 +131,9 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
     """
     u = cfg.get("universe", {})
     bt = cfg.get("backtest") or {}
-    slip = float(bt.get("slippage_pct", 0.1)) / 100
+    costs = trade_costs(cfg, provider.market)
     max_per_day = int(bt.get("max_symbols_per_day", 60))
     sessions = completed_sessions(provider.market, days)
-    from .costs import round_trip
-
-    broker = cfg.get("broker")
-    fee_fn = lambda v: round_trip(provider.market.key, broker, v)  # noqa: E731
-    min_sh = int((cfg.get("derived") or {}).get("min_shares", 1))
 
     universe = None
     if symbols is None and bt.get("universe", "market") == "market":
@@ -174,7 +185,7 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
             if not df["regular"].any():
                 continue
             for st in strategies:
-                for p in simulate_day(st, df, ctx, slip, fees=fee_fn, min_shares=min_sh):
+                for p in simulate_day(st, df, ctx, **costs):
                     rows.append({
                         "day": dd, "symbol": sym, "strategy": st.name,
                         "entry_time": p.entry_time, "entry": round(p.entry, 4),

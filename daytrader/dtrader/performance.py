@@ -18,7 +18,26 @@ def journal_path(market: Market = US):
     return market.path("journal.jsonl")
 
 
-def load_journal(market: str | Market | None = None) -> pd.DataFrame:
+def net_r(j: pd.DataFrame, cfg: dict) -> pd.Series:
+    """R of journaled paper trades after the backtest's slippage and fees, so
+    live and backtest results are judged the same way."""
+    from .backtest import trade_costs
+
+    c = trade_costs(cfg, cfg["market"])
+    out = []
+    for r in j.itertuples():
+        entry = r.entry + max(r.entry * c["slippage"], c["tick"])
+        exit_ = r.exit_price - max(r.exit_price * c["slippage"], c["tick"])
+        sh = int(getattr(r, "shares", 0) or 0)
+        if sh > 0:
+            fee = c["fees"](sh * entry)
+            entry, exit_ = entry + fee.buy_side / sh, exit_ - fee.sell_side / sh
+        out.append((exit_ - entry) / max(entry - r.initial_stop, 1e-9))
+    return pd.Series(out, index=j.index)
+
+
+def load_journal(market: str | Market | None = None, cfg: dict | None = None) -> pd.DataFrame:
+    """Paper trades the monitor closed. With `cfg`, column r is net of costs."""
     path = journal_path(get_market(market))
     if not path.exists():
         return pd.DataFrame()
@@ -31,7 +50,7 @@ def load_journal(market: str | Market | None = None) -> pd.DataFrame:
     j = j.drop_duplicates(subset=["symbol", "strategy", "entry_time"], keep="last")
     j["entry_time"] = m.parse_times(j["entry_time"])
     j["day"] = j["entry_time"].dt.date
-    j["r"] = j["r_multiple"]
+    j["r"] = net_r(j, cfg) if cfg is not None and len(j) else j["r_multiple"]
     j["source"] = "live"
     return j
 
@@ -56,7 +75,7 @@ def strategy_hint(backtest_trades: pd.DataFrame, cfg: dict, active: str | None =
     bt = backtest_trades.copy()
     if len(bt):
         bt["source"] = "backtest"
-    live = load_journal(cfg.get("market"))
+    live = load_journal(cfg.get("market"), cfg)
     frames = [f[["day", "strategy", "r", "source"]] for f in (bt, live) if len(f)]
     allt = pd.concat(frames) if frames else pd.DataFrame(columns=["day", "strategy", "r", "source"])
     if len(allt):

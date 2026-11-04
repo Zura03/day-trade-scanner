@@ -293,8 +293,12 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
             except Exception:
                 news.append(None)
     from dtrader.performance import exit_profile
+    from dtrader.ranking import MIN_SCORE, score_setup
 
     profiles = {n: exit_profile(bt, n) for n in set(b["strategy"])}
+    scores = [score_setup(r.strategy_R if r.strategy_R == r.strategy_R else None, int(r.strategy_trades),
+                          o.hist_avg_r if o else None, o.hist_fired if o else 0, r.entry, r.stop, r.last)
+              for r, o in zip(b.itertuples(), odds)]
 
     def target_hit(n):
         p = profiles.get(n)
@@ -304,6 +308,7 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
 
     show = pd.DataFrame({
         "Symbol": b["symbol"],
+        "Expected R": [round(x.expected_r, 3) for x in scores],
         "Verdict": [o.verdict if o else "–" for o in odds],
         "Reach (target / stop / neither)": [f"{o.p_target:.0%} / {o.p_stop:.0%} / {o.p_open:.0%}" if o else "–"
                                             for o in odds],
@@ -317,13 +322,32 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
         "Stop": b["stop"], "Max target": b["target"],
         "Target hit lately": [target_hit(n) for n in b["strategy"]], "Shares": b["shares"],
         "Setup": b["why"],
+        "Why this score": [x.reason for x in scores],
     })
+    order = sorted(range(len(scores)), key=lambda i: -scores[i].expected_r)
+    show = show.iloc[order].reset_index(drop=True)
+    best = scores[order[0]]
+    br = b.iloc[order[0]]
+    if best.expected_r > MIN_SCORE:
+        st.markdown(ui.notice(
+            f"<b>Best right now: {html.escape(br['symbol'])}</b> ({html.escape(REGISTRY[br['strategy']].title)}) · "
+            f"expected {best.expected_r:+.2f}R per R risked if bought at {br['last']:.2f} · "
+            f"{html.escape(best.reason)}"
+            + ("" if br["active"] else " · not your active strategy, so no alert was sent")), unsafe_allow_html=True)
+    else:
+        st.markdown(ui.notice(
+            f"<b>Nothing worth buying right now</b> · no setup has a positive expected R after costs "
+            f"(best: {html.escape(br['symbol'])} at {best.expected_r:+.2f}R, {html.escape(best.reason)})."),
+            unsafe_allow_html=True)
     money = st.column_config.NumberColumn(format="%.2f")
-    st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately"]).map(ui.verdict_cell, subset=["Verdict"])
+    st.dataframe(show.style.map(ui.signed_cell, subset=["Strategy lately", "Expected R"])
+                 .map(ui.verdict_cell, subset=["Verdict"])
                  .map(ui.earnings_cell, subset=["Earnings"]),
                  width="stretch", hide_index=True,
                  column_config={"Entry": money, "Last": money, "Stop": money, "Max target": money,
                                 "Past entry": st.column_config.NumberColumn(format="%+.2fR"),
+                                "Expected R": st.column_config.NumberColumn(format="%+.2fR"),
+                                "Why this score": st.column_config.TextColumn(width="large"),
                                 "Shares": st.column_config.NumberColumn(format="%d"),
                                 "Setup": st.column_config.TextColumn(width="large"),
                                 "News": st.column_config.TextColumn(width="large")})
@@ -335,6 +359,10 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
                   f"last backtest ({prof.trades} trades): {prof.text()}. Most winners exit on the trailing stop "
                   "(after +1R, a 1-min close below the 9 EMA) or the time exit, not at the target."
                   if prof else ""))
+    st.caption("**Expected R**: what the setup is expected to earn per R risked if you buy at the current price, "
+               "after costs. It pools the strategy's recent results with this stock's own track record, shrunk "
+               "toward zero when there are few trades (20 trades of 'no edge' are always mixed in), then subtracts "
+               "the move already made past the entry. Sorted best first; below zero, the evidence says skip it.")
     st.caption("Earnings today or next session can gap the stock through your stop. News counts headlines since "
                "the previous close - a gap with fresh news (a catalyst) tends to follow through better.")
     st.caption(f"Only your active strategy ({strategy.title}) sends alerts. Reach: from the current price, how "

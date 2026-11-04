@@ -107,7 +107,8 @@ daytrader/
     scanner.py          finds and ranks today's movers, BUY NOW logic
     backtest.py         market-wide replay of recent sessions
     performance.py      strategy-switch hint
-    research.py         edge check: targets, market filters, walk-forward
+    research.py         edge check: targets, market filters, score, walk-forward
+    ranking.py          expected-R score: which buyable setup is best now
     odds.py             setup odds (reach simulation + track record)
     news.py             headlines and earnings dates
     portfolio.py        your positions, sell advice, daily risk limits

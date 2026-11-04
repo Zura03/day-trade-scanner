@@ -172,8 +172,9 @@ def setup_odds(provider, cfg: dict, strategy: Strategy, sig: Signal, bars_today:
 
     # --- history: the same rule on this stock's previous sessions
     try:
-        from .backtest import simulate_day
+        from .backtest import simulate_day, trade_costs
 
+        costs = trade_costs(cfg, m)  # same costs as the backtest, so the record is what you'd have kept
         daily = provider.daily(sig.symbol, n_sessions + 30)
         rs = []
         for d, b in past.items():
@@ -184,7 +185,7 @@ def setup_odds(provider, cfg: dict, strategy: Strategy, sig: Signal, bars_today:
                                 float(prior["volume"].tail(10).mean()), market=m,
                                 premarket_volume_known=provider.premarket_volume_known,
                                 prev_high=float(prior["high"].iloc[-1]), prev_low=float(prior["low"].iloc[-1]))
-            for p in simulate_day(strategy, add_indicators(b, m), ctx, slippage=0.0):
+            for p in simulate_day(strategy, add_indicators(b, m), ctx, **costs):
                 rs.append(p.r_multiple)
                 if p.exit_reason == "target":
                     odds.hist_target += 1
