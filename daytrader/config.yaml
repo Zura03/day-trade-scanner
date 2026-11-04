@@ -15,6 +15,10 @@ alpaca:
 schwab:
   token_path: data/schwab_token.json
   callback_url: https://127.0.0.1:8182
+  sync_trades: true          # record buys/sells made at Schwab as positions
+  default_stop_pct: 1.0      # stop for a buy that matches no recent setup (target = 2R)
+  stop_check: true           # warn when a stock you bought today has no stop order at Schwab (read-only)
+  ignore_symbols: []         # stocks you buy to keep, not day trade: not recorded or checked
 
 # Strategy used by `scan`, `monitor` and the dashboard unless overridden.
 # Change it with:  python cli.py switch <name>   (or the dashboard dropdown)

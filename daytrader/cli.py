@@ -337,13 +337,16 @@ def cmd_sync(cfg, args):
     from dtrader import broker_sync
 
     if not broker_sync.enabled(cfg):
-        sys.exit("Trade sync needs --market india and FYERS_APP_ID / FYERS_SECRET_KEY in .env.")
-    from dtrader.data.fyers_provider import token_valid_today
+        sys.exit("Trade sync needs a broker: FYERS_APP_ID / FYERS_SECRET_KEY in .env with --market india, "
+                 "or the Schwab keys and ./run.sh auth for the US.")
+    b = broker_sync.broker_for(cfg)
+    if b.key == "fyers":
+        from dtrader.data.fyers_provider import token_valid_today
 
-    if not token_valid_today():
-        sys.exit("Log in to Fyers for today first:  ./run.sh --market india auth")
+        if not token_valid_today():
+            sys.exit("Log in to Fyers for today first:  ./run.sh --market india auth")
     msgs = broker_sync.sync(cfg)
-    print("\n".join(msgs) if msgs else "No new Fyers trades to record.")
+    print("\n".join(msgs) if msgs else f"No new {b.label} trades to record.")
 
 
 def cmd_positions(cfg, args):

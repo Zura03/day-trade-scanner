@@ -183,7 +183,7 @@ tab_picks, tab_mine, tab_bt, tab_hint, tab_alerts, tab_guide, tab_settings = st.
 
 
 def sync_broker() -> None:
-    """Pick up buys/sells made in the Fyers app (at most every 30 s per session)."""
+    """Pick up buys/sells made at your broker (at most every 30 s per session)."""
     import time as _t
 
     from dtrader import broker_sync
@@ -445,10 +445,12 @@ def picks():
 
 
 def stop_banner() -> None:
-    """Stop-loss problems found in your Fyers order book (broker_sync.stop_issues)."""
+    """Stop-loss problems found in your broker's order book (broker_sync.check_stops)."""
+    from dtrader import broker_sync
+
     issues = st.session_state.get("stop_issues") or []
     if issues:
-        st.markdown(ui.banner("<b>Check your stop-loss orders in Fyers</b> · " + " ".join(
+        st.markdown(ui.banner(f"<b>Check your stop-loss orders in {broker_sync.broker_for(cfg).label}</b> · " + " ".join(
             f"<b>{html.escape(i.title)}.</b> {html.escape(i.body)}" for i in issues)), unsafe_allow_html=True)
 
 
@@ -540,8 +542,10 @@ with tab_mine:
 
     if broker_sync.enabled(cfg):
         err = st.session_state.get("broker_sync_error")
-        st.caption("Buys and sells you make in the Fyers app are recorded here automatically within a minute "
-                   "(once you've logged in for the day), so you don't need to record them below."
+        _b = broker_sync.broker_for(cfg)
+        st.caption(f"Buys and sells you make in {_b.label} are recorded here automatically within a minute "
+                   + ("(once you've logged in for the day), " if _b.key == "fyers" else "")
+                   + "so you don't need to record them below."
                    + (f" Last sync failed: {err}" if err else ""))
     if RISK.blocked:
         st.warning("A daily risk limit is reached (" + "; ".join(RISK.breaches) + "). You can still record a "

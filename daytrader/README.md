@@ -71,11 +71,17 @@ provide the US news feed. With a paid Algo Trader Plus plan, set
 ### Schwab (US, optional)
 
 1. At <https://developer.schwab.com>, create an app with **Market Data
-   Production** and the callback URL `https://127.0.0.1:8182`. Wait for
-   "Ready For Use"; approval can take a few days.
+   Production** and **Accounts and Trading Production** (for the trade sync),
+   the lowest order limit it accepts, and the callback URL
+   `https://127.0.0.1:8182`. Wait for "Ready For Use"; approval can take a few
+   days.
 2. Put the key and secret in `.env` as `SCHWAB_APP_KEY` and `SCHWAB_APP_SECRET`.
-3. Run `./run.sh auth` and log in to Schwab in the browser that opens. Repeat
-   this every 7 days.
+3. Run `./run.sh auth` and log in to Schwab in the browser that opens. Click
+   through the security warning at the end quickly: the code it carries lasts
+   about 30 seconds. Repeat this every 7 days.
+
+This login can reach your account, so keep `.env` and `data/schwab_token.json`
+to yourself. The tool only reads from it and never places orders.
 
 ### Fyers (India, free)
 
@@ -206,7 +212,7 @@ dashboard does the same things.
 | `monitor [--once] [--session]` | Live alerts (`--session`: the daily job's mode). |
 | `buy SYMBOL SHARES PRICE [--stop --target --strategy]` | Record a buy (default stop 2% below, target 2R above). |
 | `positions` | Your positions: HOLD or SELL NOW and why. |
-| `sync` | India: record today's Fyers buys and sells as positions. |
+| `sync` | Record today's Schwab (US) or Fyers (India) buys and sells as positions. |
 | `today` | India morning routine in one command: Fyers login (waits for 6:30 if it's earlier), trade sync, checks the dashboard, monitor and phone alerts, then shows today's plan. |
 | `sell SYMBOL-or-id PRICE` | Record a sale. |
 | `risk` | Today's P&L, trades and open positions against your limits. |
@@ -427,6 +433,23 @@ already owned are left alone. It's read-only: the tool never places, changes
 or cancels an order. Turn it off with `india.fyers.stop_check: false`. The tradebook is a user-info API with
 its own 100,000-calls-a-day limit, so it doesn't use the 5,000 data calls.
 Turn it off with `india.fyers.sync_trades: false`.
+
+### Automatic recording from Schwab (US)
+
+The same recording and stop-loss check work for the US once `./run.sh auth` is
+done, with the same rules as above and these differences:
+
+- **Stocks only.** Options, ETFs and funds are ignored. Any stock you buy at
+  Schwab today is treated as a day trade, so list stocks you buy to keep under
+  `schwab.ignore_symbols`.
+- **Shares you already owned are left alone.** Only today's buys need a stop,
+  and a stop counts as leftover only if the account holds none of that stock.
+  Good-till-cancel stops and stops inside OCO and bracket orders all count.
+- **The login lasts 7 days.** When it expires you get one push a day saying
+  trades and stops aren't being checked, until you run `./run.sh auth`.
+
+`./run.sh sync` does it once from the terminal. Turn it off with
+`schwab.sync_trades: false` or `schwab.stop_check: false`.
 
 Your positions are stored in `data/[india/]my_positions.json`, and closed
 trades in `my_trades.jsonl`. These are separate from the monitor's paper

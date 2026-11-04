@@ -26,6 +26,7 @@ class SchwabProvider(DataProvider):
             callback_url=callback_url,
             token_path=str(ROOT / token_path),
         )
+        (ROOT / token_path).chmod(0o600)  # this login can reach your account
 
     def movers(self, limit: int = 50) -> list[str]:
         from schwab.client import Client
@@ -90,6 +91,7 @@ class SchwabProvider(DataProvider):
         df = pd.concat(frames)
         df.index = pd.to_datetime(df["datetime"], unit="ms", utc=True).dt.tz_convert(NY)
         df = df[BAR_COLS].astype(float)
+        df = df[(df.index.date >= start) & (df.index.date <= end)]  # before 4:00 it returns yesterday's
         return df[~df.index.duplicated()].sort_index()
 
     def daily(self, symbol: str, days: int = 60) -> pd.DataFrame:

@@ -155,19 +155,22 @@ class Monitor:
         self._save()
 
     def _sync_broker(self) -> None:
-        """Record buys/sells made in the Fyers app and check their stop-loss
-        orders (India, once logged in). Each stop problem is pushed once."""
+        """Record buys/sells made at your broker and check their stop-loss
+        orders (Fyers or Schwab, once logged in). Each stop problem is pushed once."""
         from . import broker_sync
 
-        if not broker_sync.enabled(self.cfg):
+        b = broker_sync.broker_for(self.cfg)
+        if b is None:
             return
         try:
             msgs, issues = broker_sync.sync_and_check(self.cfg)
         except Exception as e:
-            print(f"Fyers trade sync failed: {e}", file=sys.stderr, flush=True)
+            print(f"{b.label} trade sync failed: {e}", file=sys.stderr, flush=True)
+            if not self._seen(f"syncfail|{self.m.now().date()}"):  # your stops are no longer being checked
+                notify("INFO", f"{b.label} trade sync failed", f"Trades and stop-losses aren't being checked: {e}", self.cfg)
             return
         for msg in msgs:
-            notify("INFO", "Fyers trade recorded", msg, self.cfg)
+            notify("INFO", f"{b.label} trade recorded", msg, self.cfg)
         for i in issues:
             if not self._seen(i.key):
                 notify("STOP", i.title, i.body, self.cfg)

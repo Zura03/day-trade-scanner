@@ -112,7 +112,8 @@ daytrader/
     odds.py             setup odds (reach simulation + track record)
     news.py             headlines and earnings dates
     portfolio.py        your positions, sell advice, daily risk limits
-    broker_sync.py      records your Fyers buys/sells, checks your stop-losses
+    broker_sync.py      records your Fyers and Schwab buys/sells, checks your stop-losses
+    schwab_sync.py      reads Schwab orders and holdings for it
     costs.py            broker + statutory fees per trade
     alerts.py           live monitor, phone and desktop notifications
     ui.py               dashboard design tokens and components
