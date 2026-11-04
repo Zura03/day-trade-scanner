@@ -213,6 +213,8 @@ def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: dat
                 "target": sig.target if sig else None,
                 "shares": st.position_size(sig) if sig else None,
                 "triggered_at": f"{sig.time:%H:%M}" if sig else None,
+                "trigger_day": sig.time.date().isoformat() if sig else None,
+                "outcome": a.get("outcome"),
                 "r_from_entry": round((c.last - sig.entry) / sig.risk, 2) if sig and sig.risk > 0 else None,
                 "why": (f"[{a['outcome']}] " if a.get("outcome") else "") + sig.reason if sig
                        else (f"watch {a['watch'][1]}" if a["watch"] else ""),

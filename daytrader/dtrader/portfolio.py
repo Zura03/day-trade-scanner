@@ -211,6 +211,40 @@ def recent_buyable(market: str | Market, minutes: int = 60) -> dict[str, dict]:
     return dict(sorted(keep.items(), key=lambda kv: kv[1]["last_seen"], reverse=True))
 
 
+OUTCOME_LABELS = {"stop": "Hit stop", "below stop": "Below stop", "target": "Hit target", "breakeven": "Breakeven exit",
+                  "lost 9 EMA": "Trailing exit", "trail stop": "Trailing exit", "time exit": "Time exit",
+                  "close": "Time exit", "ran past entry": "Ran past entry", "past entry cutoff": "Past entry cutoff"}
+
+
+def buyable_today(market: str | Market, scan: pd.DataFrame) -> pd.DataFrame:
+    """Every setup buyable at some point today, newest trigger first: the ones
+    the dashboard saw (with when), plus today's triggers in the latest scan,
+    which covers the time it wasn't open."""
+    m = get_market(market)
+    today = m.now().date().isoformat()
+    try:
+        saved = json.loads(_recent_path(m).read_text()).get(today, {})
+    except (OSError, json.JSONDecodeError):
+        saved = {}
+    rows = {k: {**v, "now": "Left the scan"} for k, v in saved.items()}
+    if len(scan):
+        live = scan[(scan["trigger_day"] == today)
+                    & (scan["status"].eq("BUY NOW") | scan["status"].str.startswith("triggered"))]
+        for _, r in live.iterrows():
+            k = setup_key(r)
+            now = "Buyable now" if r["status"] == "BUY NOW" else OUTCOME_LABELS.get(r["outcome"], "No longer buyable")
+            rows[k] = {**rows.get(k, {}), **{c: r[c] for c in ("symbol", "strategy", "triggered_at", "entry", "stop",
+                                                                "target", "last")}, "now": now}
+    cols = ["symbol", "strategy", "triggered_at", "now", "entry", "stop", "target", "last", "past_entry", "seen"]
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame(rows.values())
+    out["past_entry"] = (out["last"] - out["entry"]) / (out["entry"] - out["stop"]).where(lambda x: x > 0)
+    out["seen"] = [f"{a[11:16]}–{b[11:16]}" if isinstance(a, str) else "–"
+                   for a, b in zip(out.get("first_seen", [None] * len(out)), out.get("last_seen", [None] * len(out)))]
+    return out.sort_values(["triggered_at", "symbol"], ascending=[False, True]).reset_index(drop=True)[cols]
+
+
 # ---- daily risk limits --------------------------------------------------------
 @dataclass
 class RiskStatus:

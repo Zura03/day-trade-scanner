@@ -254,6 +254,32 @@ def candle_chart(cand, sig=None, watch=None, title=""):
     return fig
 
 
+# ---------------- buyable today -------------------------------------------
+def buyable_today_section(df: pd.DataFrame) -> None:
+    """Every setup that was buyable at some point today, not just the count."""
+    from dtrader.portfolio import buyable_today
+
+    t = buyable_today(mk, df)
+    st.markdown(ui.section("Buyable today", f"{len(t)} setups in {t['symbol'].nunique()} stocks"
+                           if len(t) else "none yet"), unsafe_allow_html=True)
+    if t.empty:
+        st.markdown(ui.empty("No setup has triggered yet today."), unsafe_allow_html=True)
+        return
+    show = pd.DataFrame({
+        "Symbol": t["symbol"], "Strategy": [REGISTRY[n].title for n in t["strategy"]], "Triggered": t["triggered_at"],
+        "Now": t["now"], "Entry": t["entry"], "Stop": t["stop"], "Max target": t["target"], "Last": t["last"],
+        "Past entry": t["past_entry"], "Seen buyable": t["seen"]})
+    money = st.column_config.NumberColumn(format="%.2f")
+    st.dataframe(show.style.map(ui.signed_cell, subset=["Past entry"]), width="stretch", hide_index=True,
+                 height=min(420, 38 + 35 * len(show)),
+                 column_config={"Entry": money, "Stop": money, "Max target": money, "Last": money,
+                                "Past entry": st.column_config.NumberColumn(format="%+.2fR")})
+    st.caption("All strategies, newest first. **Now** is what has happened since, as of the last scan. **Past entry** "
+               "is where the last price sits against the entry, not what the trade would have made after its exits. "
+               "**Seen buyable** is when the dashboard saw it buyable, so \"–\" means it wasn't open then, or the setup was gone before the next scan. "
+               "A stock that left the scan keeps its last price from when it was seen.")
+
+
 # ---------------- buyable now ---------------------------------------------
 def buyable_section(df: pd.DataFrame, cands: list) -> None:
     """Every setup that is buyable right now, across all strategies, with its odds."""
@@ -390,9 +416,11 @@ def picks():
     if df.empty:
         st.markdown(ui.empty("No stocks pass the filters right now (price, size of move, relative volume)."),
                     unsafe_allow_html=True)
+        buyable_today_section(df)
         return
     view = df if compare else df[df["strategy"] == strategy.name]
     buyable_section(df, cands)
+    buyable_today_section(df)
     st.markdown(ui.section(f"{strategy.title} scan" if not compare else "All strategies",
                            f"{view['symbol'].nunique()} candidates"), unsafe_allow_html=True)
     st.markdown(ui.tiles([

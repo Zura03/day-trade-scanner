@@ -225,7 +225,7 @@ def cmd_today(cfg, args):
     from datetime import datetime, timedelta
 
     from dtrader import broker_sync
-    from dtrader.data.fyers_provider import (DAILY_BUDGET, DEFAULT_REDIRECT, TOKEN_RESET, calls_today,
+    from dtrader.data.fyers_provider import (DAILY_BUDGET, DEFAULT_REDIRECT, TOKEN_RESET, calls_by_source, calls_today,
                                               fyers_keys, fyers_login, token_valid_today)
     from dtrader.portfolio import load_positions
 
@@ -259,7 +259,8 @@ def cmd_today(cfg, args):
         fyers_login(keys[0], keys[1], (cfg.get("fyers") or {}).get("redirect_url", DEFAULT_REDIRECT))
         ok("logged in for today (lasts until 6:30 tomorrow)")
     if token_valid_today():
-        ok(f"data calls used today: {calls_today()} of {DAILY_BUDGET}")
+        by = ", ".join(f"{k} {v}" for k, v in sorted(calls_by_source().items()))
+        ok(f"data calls used today: {calls_today()} of {DAILY_BUDGET}" + (f" ({by})" if by else ""))
         if broker_sync.enabled(cfg):
             msgs = broker_sync.sync(cfg)
             ok("trades: " + ("; ".join(msgs) if msgs else "no new Fyers trades to record"))

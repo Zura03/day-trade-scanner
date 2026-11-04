@@ -116,7 +116,11 @@ of the day. The tool keeps well inside that:
   of them just fetched is reused by the other. Leaving the dashboard open with
   **Auto-refresh every 60 s** on adds almost nothing: measured, the monitor and
   an auto-refreshing dashboard together use about 14 calls a minute, and the
-  pacing slows itself to make the budget last to the close. The first time a
+  pacing slows itself to make the budget last to the close, keeping 500 calls
+  back for evening scans and backtests. Bars are final 2 minutes after the
+  close, so each stock's are fetched once more and then reused. `./run.sh
+  --market india today` shows the day's calls by source (live bars, history,
+  daily, quotes). The first time a
   stock becomes buyable, its odds need its last 20 days of minute charts (up
   to 20 calls, once; they're kept on disk);
 - don't run a second dashboard (`./run.sh`) next to the always-on one: it's
@@ -186,7 +190,7 @@ next opens, plus the data source, active strategy and last scan time.
 
 | Tab | What's there |
 |---|---|
-| **Picks** | **Buyable now** across all strategies, with odds, news and earnings. Below it, your active strategy's scan table (status, gap, relative volume, levels) and a candle chart with VWAP, EMA 9, levels and the stock's latest headlines. A red banner lists positions to sell; an amber one shows when a risk limit has paused BUY alerts. |
+| **Picks** | **Buyable now** across all strategies, with odds, news and earnings. Then **Buyable today**, every setup that triggered today. Below it, your active strategy's scan table (status, gap, relative volume, levels) and a candle chart with VWAP, EMA 9, levels and the stock's latest headlines. A red banner lists positions to sell; an amber one shows when a risk limit has paused BUY alerts. |
 | **My positions** | Today's limits; your open positions (HOLD or SELL NOW, P&L, current stop) with sell, edit and delete; **Record a buy**, prefilled from a current or recent setup; closed trades with realized P&L, win rate and average R. |
 | **Backtest** | Run a backtest over N sessions; a summary per strategy, sorted best-first; equity curves (your active strategy and the best 3, up to 4); every trade. |
 | **Switch hint** | Which strategy is working lately, and a button to apply the suggestion. |
@@ -255,6 +259,12 @@ Other statuses:
   target, ran past entry, and so on).
 - **qualifies:** passes the daily filter, but no setup yet.
 - **no setup.**
+
+**Buyable today**, under Buyable now, lists every setup that was buyable at some
+point today across all strategies, newest first: when it triggered, what has
+happened since, its levels, where the price sits against the entry, and when
+the dashboard saw it buyable. It includes setups that triggered while the
+dashboard was closed, as long as the stock is still in the latest scan.
 
 **Buyable now**, at the top of Picks, lists every BUY NOW setup across all 13
 strategies, **sorted by Expected R**, with a banner naming the **best one right

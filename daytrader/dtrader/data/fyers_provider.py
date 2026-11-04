@@ -50,7 +50,9 @@ AUTH_ERRORS = {-8, -15, -16, -17}  # expired / invalid token
 PER_SECOND, PER_MINUTE = 3, 40
 DAILY_BUDGET = 4500        # of the 5,000/day allowed
 LIVE_RESERVE = 2500        # past-day history may not eat into this before/during the session
+EVENING_RESERVE = 500      # live pacing leaves this for evening scans and backtests
 MAX_LIVE_RATE = 30         # today's-bars refetches per minute, at most
+FINAL_AFTER_MINUTES = 2    # today's bars are final this long after the close
 CALLS_PATH = INDIA.path("fyers_calls.json")
 QUOTE_TTL = 150            # seconds a shared quote snapshot is reused (movers don't need fresher)
 SHARED_DIR = CACHE_DIR / "fyers" / "shared"
@@ -167,7 +169,12 @@ def calls_today() -> int:
     return int(_read_calls().get("count", 0))
 
 
-def take_call(reserve: int = 0) -> None:
+def calls_by_source() -> dict[str, int]:
+    """Today's calls per source: today (live bars), history, daily, quotes."""
+    return dict(_read_calls().get("by", {}))
+
+
+def take_call(reserve: int = 0, source: str = "other") -> None:
     """Wait for a free slot and count the call. The record lives in a file
     under an flock, so the dashboard and the monitor (separate processes)
     share one limit, as Fyers counts them together."""
@@ -183,6 +190,8 @@ def take_call(reserve: int = 0) -> None:
             if len(recent) < PER_MINUTE and last_sec < PER_SECOND:
                 d["recent"] = recent + [now]
                 d["count"] += 1
+                by = d.setdefault("by", {})
+                by[source] = by.get(source, 0) + 1
                 CALLS_PATH.write_text(json.dumps(d))
                 return
             wait = recent[0] + 60 - now if len(recent) >= PER_MINUTE else 0.3
@@ -195,6 +204,17 @@ def _session_minutes_left() -> float:
     if not hours or now >= hours[1]:
         return 0.0
     return (hours[1] - max(now, hours[0])).total_seconds() / 60
+
+
+def _bars_final_since() -> float | None:
+    """When today's bars became final (a timestamp), or None while they can
+    still change. A day with no session has nothing to wait for."""
+    now = INDIA.now()
+    hours = INDIA.session_hours(now.date())
+    if not hours:
+        return 0.0
+    final = hours[1] + timedelta(minutes=FINAL_AFTER_MINUTES)
+    return final.timestamp() if now >= final else None
 
 
 def fyers_symbol(s: str) -> str:
@@ -213,9 +233,9 @@ class FyersProvider(DataProvider):
         self._asked: dict[str, float] = {}                         # symbol -> last asked for
 
     # ---- helpers ----------------------------------------------------------
-    def _get(self, path: str, params: dict, reserve: int = 0) -> dict:
+    def _get(self, path: str, params: dict, reserve: int = 0, source: str = "other") -> dict:
         for attempt in range(3):
-            take_call(reserve)
+            take_call(reserve, source)
             r = self.http.get(f"{DATA_API}{path}", params=params)
             try:
                 d = r.json()
@@ -233,10 +253,11 @@ class FyersProvider(DataProvider):
             raise RuntimeError(f"Fyers {path}: {d.get('message') or r.status_code}")
         raise RuntimeError(f"Fyers {path}: rate limited")
 
-    def _history(self, symbol: str, start: datetime, end: datetime, resolution: str, reserve: int = 0) -> list:
+    def _history(self, symbol: str, start: datetime, end: datetime, resolution: str, reserve: int = 0,
+                 source: str = "history") -> list:
         d = self._get("/history", {"symbol": fyers_symbol(symbol), "resolution": resolution, "date_format": "0",
                                    "range_from": str(int(start.timestamp())), "range_to": str(int(end.timestamp())),
-                                   "cont_flag": "1"}, reserve)
+                                   "cont_flag": "1"}, reserve, source)
         return d.get("candles") or []
 
     @staticmethod
@@ -314,7 +335,7 @@ class FyersProvider(DataProvider):
             stale = [s for s in symbols if s not in snap or snap[s][0] < now - QUOTE_TTL]
             try:
                 for i in range(0, len(stale), 50):
-                    d = self._get("/quotes", {"symbols": ",".join(fyers_symbol(s) for s in stale[i:i + 50])})
+                    d = self._get("/quotes", {"symbols": ",".join(fyers_symbol(s) for s in stale[i:i + 50])}, source="quotes")
                     for q in d.get("d") or []:
                         v = q.get("v") or {}
                         if q.get("s") == "ok" and v.get("lp"):
@@ -337,7 +358,7 @@ class FyersProvider(DataProvider):
         stocks being watched fit in the budget left for the session."""
         now = _time.time()
         watched = sum(1 for t in self._asked.values() if t > now - 300) or 1
-        left = max(DAILY_BUDGET - calls_today(), 1)
+        left = max(DAILY_BUDGET - EVENING_RESERVE - calls_today(), 1)
         rate = min(MAX_LIVE_RATE, left / max(_session_minutes_left(), 1.0))
         return max(55.0, 60.0 * watched / rate)
 
@@ -350,14 +371,16 @@ class FyersProvider(DataProvider):
                 return self._yahoo_provider().intraday(symbol, day)
         self._asked[symbol] = _time.time()
         every = self._refresh_every()
+        final = _bars_final_since()
+        since = _time.time() - every if final is None else final  # once final, one fetch is enough
         hit = self._today.get(symbol)
-        if hit and hit[0] > _time.time() - every:
+        if hit and hit[0] > since:
             return hit[1]
         SHARED_DIR.mkdir(parents=True, exist_ok=True)
         path = SHARED_DIR / f"{symbol}_{day}.pkl"  # today's bars fetched by any process
         with open(SHARED_DIR / f"{symbol}.lock", "w") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)  # if the other process is fetching this stock, wait and reuse it
-            if path.exists() and path.stat().st_mtime > _time.time() - every:
+            if path.exists() and path.stat().st_mtime > since:
                 if (shared := read_cache(path)) is not None:
                     self._today[symbol] = (path.stat().st_mtime, shared)
                     return shared
@@ -379,11 +402,12 @@ class FyersProvider(DataProvider):
         hours = INDIA.session_hours(now.date())
         live_ahead = hours is not None and now < hours[1]   # today's session still to come or running
         reserve = LIVE_RESERVE if start < now.date() and live_ahead else 0
+        source = "history" if start < now.date() else "today"
         frames, cur = [], start
         while cur <= end:  # 1-minute candles: max 100 days per request
             stop = min(cur + timedelta(days=90), end)
             hi = min(datetime.combine(stop, INDIA.close, INDIA.tz), INDIA.now())
-            c = self._history(symbol, datetime.combine(cur, INDIA.open, INDIA.tz), hi, "1", reserve)
+            c = self._history(symbol, datetime.combine(cur, INDIA.open, INDIA.tz), hi, "1", reserve, source)
             frames.append(self._frame(c))
             cur = stop + timedelta(days=1)
         frames = [f for f in frames if len(f)]
@@ -394,7 +418,7 @@ class FyersProvider(DataProvider):
             now = INDIA.now()
             start = now - timedelta(days=min(int(n * 1.6) + 5, 365))
             try:
-                return self._frame(self._history(symbol, start, now, "D"), daily=True)
+                return self._frame(self._history(symbol, start, now, "D", source="daily"), daily=True)
             except BudgetExhausted:
                 return self._yahoo_provider().daily(symbol, n)
 
