@@ -42,6 +42,8 @@ DISCLAIMER = ("Educational tool, not financial advice. Day trading is risky: "
 def provider(cfg, args):
     from dtrader.data import get_provider
 
+    if getattr(args, "source", None):
+        cfg["data_source"] = args.source  # so the monitor won't switch away from your choice
     p = get_provider(cfg, getattr(args, "source", None))
     print(f"[{cfg['market'].name} market, data: {p.name}]", file=sys.stderr)
     return p
@@ -460,7 +462,7 @@ def cmd_auth(cfg, args):
             return
         sys.exit("No India broker in .env: add FYERS_APP_ID / FYERS_SECRET_KEY "
                  "(or GROWW_API_KEY / GROWW_API_SECRET, or KITE_API_KEY / KITE_API_SECRET).")
-    p = get_provider(cfg, "schwab")
+    p = get_provider(cfg, "schwab", login=True)
     r = p.client.get_quotes(["AAPL"])
     print("Schwab login OK" if r.status_code == 200 else f"Schwab returned {r.status_code}: {r.text[:200]}")
 

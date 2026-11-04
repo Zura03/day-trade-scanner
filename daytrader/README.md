@@ -48,7 +48,7 @@ have keys for:
 
 | Market | Order of preference |
 |---|---|
-| US | Alpaca, then Schwab, then Yahoo |
+| US | Schwab for today, Alpaca for past days and backtests (`data_source: schwab`). `auto` means Alpaca, then Schwab, then Yahoo |
 | India | Fyers (once logged in today), then Groww (once today's approval is done), then Zerodha Kite, then Yahoo NSE |
 
 ### Alpaca (US, recommended, free)
@@ -82,6 +82,23 @@ provide the US news feed. With a paid Algo Trader Plus plan, set
 
 This login can reach your account, so keep `.env` and `data/schwab_token.json`
 to yourself. The tool only reads from it and never places orders.
+
+What Schwab supplies, with `data_source: schwab`:
+
+- **Today's quotes and minute bars.** Quotes are real-time with premarket volume,
+  which Alpaca's free plan doesn't give. Schwab's bars start at 7:00 ET, not 4:00,
+  so a premarket high set before 7:00 is missed, and their volume ran 4-21% below
+  Alpaca's full-market bars on four stocks checked, so relative volume reads a
+  little lower than in backtests. Prices matched.
+- **Not the rest.** Past days, track records and market-wide backtests stay on
+  Alpaca, so those results don't change. Schwab's movers list is only about 20
+  stocks, so Alpaca's and Yahoo's are added to it.
+- **Limits.** Calls are held to 100 a minute (of about 120 allowed), shared by the
+  dashboard and monitor, and today's bars for a stock are reused for 55 seconds.
+  A refusal for going too fast waits and retries.
+- **If the login expires or Schwab fails**, the dashboard and monitor fall back to
+  Alpaca and tell you. The monitor warns a day before expiry at its start, and
+  switches back once you've run `./run.sh auth`.
 
 ### Fyers (India, free)
 

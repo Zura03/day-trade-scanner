@@ -346,11 +346,14 @@ def in_session(now: datetime, market: Market = US) -> bool:
     return now.weekday() < 5 and market.day_start <= now.time() <= end
 
 
-def _broker_if_ready(broker: str) -> DataProvider | None:
-    """India: the broker's provider once today's login/approval exists."""
-    from .data import _broker_provider
+def _broker_if_ready(broker: str, cfg: dict | None = None) -> DataProvider | None:
+    """The broker's provider once its login/approval exists."""
+    from .data import _broker_provider, get_provider
 
     try:
+        if broker == "schwab":
+            p = get_provider(cfg, "schwab")
+            return p if p.name == "schwab" else None
         return _broker_provider(broker)  # Groww retries its token at most every 5 min
     except Exception:
         return None
@@ -385,7 +388,17 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
         elif broker:
             notify("INFO", f"{broker.title()} login needed",
                    f"Using free Yahoo data until then. {india_login_hint(broker)}", cfg)
+    elif m.key == "us" and cfg.get("data_source") == "schwab":
+        from .data.schwab_provider import login_seconds_left
+
+        left = login_seconds_left((cfg.get("schwab") or {}).get("token_path", "data/schwab_token.json"))
+        if provider.name != "schwab":
+            broker = "schwab"
+            notify("INFO", "Schwab login needed", f"Using {provider.name} data until then. Run ./run.sh auth", cfg)
+        elif left < 86400:
+            notify("INFO", "Schwab login expires soon", f"In {left / 3600:.0f} hours. Run ./run.sh auth", cfg)
     last_broker_check = _time.time()
+    recheck = 120
     failures = 0
     while True:
         now = m.now()
@@ -393,12 +406,12 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
             notify("INFO", "Monitor finished for today",
                    f"{len(mon.state['positions'])} tracked trade(s) still open", cfg)
             return
-        if broker and _time.time() - last_broker_check > 120:
+        if broker and _time.time() - last_broker_check > recheck:
             last_broker_check = _time.time()
-            bp = _broker_if_ready(broker)
+            bp = _broker_if_ready(broker, cfg)
             if bp is not None:
                 mon.p, mon.cands = bp, []
-                notify("INFO", f"Switched to {broker.title()} data", "Logged in for today", cfg)
+                notify("INFO", f"Switched to {broker.title()} data", "Logged in", cfg)
                 broker = None
         if once or in_session(now, m):
             try:
@@ -415,6 +428,15 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
                     last_broker_check = _time.time()
                     notify("INFO", f"{broker.title()} data failing - using Yahoo",
                            f"{str(e)[:120]}. Will switch back when {broker.title()} works again.", cfg)
+                elif m.key == "us" and mon.p.name == "schwab" and failures >= 2:
+                    # a good token can still fail (revoked, outage), so don't retry it every 2 minutes
+                    from .data import get_provider
+
+                    broker, failures, recheck = "schwab", 0, 900
+                    mon.p, mon.cands = mon.p.history or get_provider(cfg, "yfinance"), []
+                    last_broker_check = _time.time()
+                    notify("INFO", f"Schwab data failing - using {mon.p.name}",
+                           f"{str(e)[:120]}. Trying Schwab again every 15 minutes.", cfg)
         if once:
             return
         _time.sleep(poll if in_session(now, m) else (60 if close_at else 300))

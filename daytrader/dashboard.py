@@ -138,6 +138,8 @@ with st.sidebar:
         st.stop()
     if mkey == "india" and india_login_needed() and prov.name == "yfinance_in":
         st.warning(f"Not logged in to your broker today - using free Yahoo data. {india_login_hint()}")
+    if source == "schwab" and prov.name != "schwab":
+        st.warning(f"Schwab login missing or expired - using {prov.name} data. Run  ./run.sh auth")
 
     names = list(REGISTRY)
     # Per-market widget so a choice never carries over to the other market; and
@@ -664,7 +666,7 @@ with tab_mine:
 # ---------------- backtest ------------------------------------------------
 with tab_bt:
     c1, c2 = st.columns([1, 3])
-    days = c1.slider("Sessions", 3, {"yfinance": 25, "yfinance_in": 25, "schwab": 45}.get(prov.name, 90), 10)
+    days = c1.slider("Sessions", 3, {"yfinance": 25, "yfinance_in": 25, "schwab": 90 if getattr(prov, "history", None) else 45}.get(prov.name, 90), 10)
     extra = c2.text_input("Extra symbols (space separated, optional)")
     if st.button("Run backtest", type="primary"):
         logbox = st.empty()

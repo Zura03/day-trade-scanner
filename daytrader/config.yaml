@@ -4,7 +4,9 @@
 
 # Data source: "alpaca", "schwab", "yfinance" (free, no key) or "auto"
 # (Alpaca if its keys are in .env, else Schwab, else Yahoo).
-data_source: auto
+# schwab: today's quotes and bars from Schwab, past days and backtests from
+# Alpaca. Without a valid Schwab login it falls back to Alpaca.
+data_source: schwab
 
 alpaca:
   # sip_delayed: free plan - full-market bars up to 16 min ago + live IEX bars after

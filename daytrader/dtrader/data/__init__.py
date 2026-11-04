@@ -4,8 +4,10 @@ from ..config import alpaca_keys, kite_keys, load_config, schwab_keys
 from .base import DataProvider
 
 
-def get_provider(cfg: dict | None = None, source: str | None = None) -> DataProvider:
+def get_provider(cfg: dict | None = None, source: str | None = None, login: bool = False) -> DataProvider:
     """US:    auto = Alpaca if its keys are in .env, else Schwab, else free Yahoo.
+           schwab without a valid login = Alpaca, else Yahoo, until `login=True`
+           (`./run.sh auth`) has opened the browser.
     India: auto = your broker (Fyers, else Groww, else Zerodha Kite) once
            today's login is done, else free Yahoo (NSE)."""
     cfg = cfg or load_config()
@@ -23,12 +25,21 @@ def get_provider(cfg: dict | None = None, source: str | None = None) -> DataProv
     if source == "schwab" or (source == "auto" and skeys):
         if not skeys:
             raise RuntimeError("data_source is 'schwab' but SCHWAB_APP_KEY / SCHWAB_APP_SECRET are not set in .env")
-        from .schwab_provider import SchwabProvider
+        from .schwab_provider import SchwabProvider, login_seconds_left
 
         s = cfg.get("schwab", {})
-        return SchwabProvider(skeys[0], skeys[1], s.get("callback_url", "https://127.0.0.1:8182"),
-                              s.get("token_path", "data/schwab_token.json"))
-    if source not in ("auto", "yfinance"):
+        token = s.get("token_path", "data/schwab_token.json")
+        history = None
+        if akeys:
+            from .alpaca_provider import AlpacaProvider
+
+            history = AlpacaProvider(akeys[0], akeys[1], (cfg.get("alpaca") or {}).get("feed", "sip_delayed"))
+        if login or login_seconds_left(token) > 0:
+            return SchwabProvider(skeys[0], skeys[1], s.get("callback_url", "https://127.0.0.1:8182"), token,
+                                  history, login)
+        if history is not None:
+            return history
+    elif source not in ("auto", "yfinance"):
         raise RuntimeError(f"Data source '{source}' is not available for the US market")
     from .yf_provider import YFinanceProvider
 
