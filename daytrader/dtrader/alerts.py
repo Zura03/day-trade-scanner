@@ -23,7 +23,7 @@ from .data.base import DataProvider
 from .indicators import add_indicators
 from .markets import US, Market, get_market
 from .performance import journal_path
-from .scanner import analyse, gather_candidates, session_day
+from .scanner import analyse, gather_candidates, refresh_bars, session_day
 from .strategies import MAX_CHASE_R, Position, Strategy, get_strategy
 COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "STOP": "\033[1;31m", "WATCH": "\033[1;33m",
           "INFO": "\033[1;36m"}
@@ -135,10 +135,7 @@ class Monitor:
             self.last_universe = _time.time()
         else:  # refresh bars only
             for c in self.cands:
-                bars = self.p.intraday(c.symbol, day)
-                if len(bars):
-                    c.bars = add_indicators(bars, self.m)
-                    c.last = float(bars["close"].iloc[-1])
+                refresh_bars(self.p, c, day)
 
         for c in self.cands:
             a = analyse(self.strategy, c)

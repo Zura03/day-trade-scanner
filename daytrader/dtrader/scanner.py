@@ -189,6 +189,20 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
     return out
 
 
+def refresh_bars(provider: DataProvider, c: Candidate, day: date) -> None:
+    """New bars for a candidate, and a context built from them: a premarket high
+    set a minute before the open must not be judged against an older one."""
+    bars = provider.intraday(c.symbol, day)
+    if not len(bars):
+        return
+    x = c.ctx
+    c.ctx = build_context(c.symbol, day, bars, x.prev_close, x.avg_volume, x.float_shares, market=provider.market,
+                          premarket_volume_known=provider.premarket_volume_known,
+                          prev_high=x.prev_high, prev_low=x.prev_low)
+    c.bars = add_indicators(bars, provider.market)
+    c.last = float(bars["close"].iloc[-1])
+
+
 def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: date | None = None,
          log=print) -> tuple[pd.DataFrame, list[Candidate]]:
     cands = gather_candidates(provider, cfg, day, log=log)

@@ -743,10 +743,8 @@ with tab_hint:
                "Edit `switch_hint` in config.yaml to tune.")
 
 # ---------------- alerts --------------------------------------------------
-with tab_alerts:
-    st.markdown(f"Live {mk.name} alerts come from the monitor, which the daily job starts "
-                "automatically (`./scripts/autostart.sh status`). To run it by hand:")
-    st.code("./run.sh monitor" if mk.key == "us" else f"./run.sh --market {mk.key} monitor", language="bash")
+@st.fragment(run_every=60)  # the monitor keeps writing while the page sits open: only reads local files
+def alerts_log():
     pos = load_state(mk).get("positions", [])
     st.markdown(ui.section("Paper trades from alerts", str(len(pos))), unsafe_allow_html=True)
     if pos:
@@ -766,6 +764,13 @@ with tab_alerts:
         st.metric("Live total R", f"{j['r'].sum():+.2f}")
     else:
         st.caption("No closed trades yet.")
+
+
+with tab_alerts:
+    st.markdown(f"Live {mk.name} alerts come from the monitor, which the daily job starts "
+                "automatically (`./scripts/autostart.sh status`). To run it by hand:")
+    st.code("./run.sh monitor" if mk.key == "us" else f"./run.sh --market {mk.key} monitor", language="bash")
+    alerts_log()
 
 # ---------------- guide ---------------------------------------------------
 with tab_guide:
