@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -216,10 +217,10 @@ OUTCOME_LABELS = {"stop": "Hit stop", "below stop": "Below stop", "target": "Hit
                   "close": "Time exit", "ran past entry": "Ran past entry", "past entry cutoff": "Past entry cutoff"}
 
 
-def buyable_today(market: str | Market, scan: pd.DataFrame) -> pd.DataFrame:
+def buyable_today(market: str | Market, scan: pd.DataFrame, hidden: Collection[str] = ()) -> pd.DataFrame:
     """Every setup buyable at some point today, newest trigger first: the ones
     the dashboard saw (with when), plus today's triggers in the latest scan,
-    which covers the time it wasn't open."""
+    which covers the time it wasn't open. Leaves out `hidden` strategies."""
     m = get_market(market)
     today = m.now().date().isoformat()
     try:
@@ -235,6 +236,7 @@ def buyable_today(market: str | Market, scan: pd.DataFrame) -> pd.DataFrame:
             now = "Buyable now" if r["status"] == "BUY NOW" else OUTCOME_LABELS.get(r["outcome"], "No longer buyable")
             rows[k] = {**rows.get(k, {}), **{c: r[c] for c in ("symbol", "strategy", "triggered_at", "entry", "stop",
                                                                 "target", "last")}, "now": now}
+    rows = {k: v for k, v in rows.items() if v["strategy"] not in hidden}
     cols = ["symbol", "strategy", "triggered_at", "now", "entry", "stop", "target", "last", "past_entry", "seen"]
     if not rows:
         return pd.DataFrame(columns=cols)

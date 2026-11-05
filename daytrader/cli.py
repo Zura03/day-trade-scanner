@@ -78,7 +78,7 @@ def cmd_scan(cfg, args):
         from dtrader.scanner import buyable_now
 
         recent = strategy_hint(load_last_trades(cfg["market"]), cfg, names=list(REGISTRY)).table
-        b = buyable_now(df, cfg["active_strategy"], recent)
+        b = buyable_now(df, cfg["active_strategy"], recent, cfg.get("hide_from_buyable") or ())
         if b.empty:
             print("Nothing is buyable right now.")
             return

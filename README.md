@@ -4,8 +4,8 @@ A day-trading assistant for **US small caps** and **Indian NSE F&O stocks**.
 It scans the day's movers, finds setups for 13 switchable strategies, and tells
 you what's buyable right now, with entry, stop, target and share size. It
 sends BUY and SELL alerts to your phone and tracks the shares you buy until
-it's time to sell. Every morning it re-runs a market-wide backtest and
-switches to the strategy that has been working best.
+it's time to sell. Every morning it re-runs a market-wide backtest and reports
+which strategy has been working best. In India it also switches to that strategy.
 
 > Educational tool, not financial advice. It never places orders: you trade in
 > your own broker app and record what you did.
@@ -17,7 +17,7 @@ switches to the strategy that has been working best.
   from r/Daytrading (VWAP Bounce, First-Hour Trend, Stop-Hunt Reversal, Rip &
   Dip, Bagholder Bounce, 9:45 Reversal, ORB Retest).
 - **Buyable now:** every setup that has triggered and can still be bought,
-  across all strategies. Each one shows its entry, stop, 2R target and share
+  across all strategies but the ones in `hide_from_buyable`. Each one shows its entry, stop, 2R target and share
   size from your risk per trade, plus:
   - **setup odds:** a replay of the rest of the day, run 10,000 times on the
     stock's own price history, plus this rule's track record on the stock;
@@ -35,8 +35,8 @@ switches to the strategy that has been working best.
 - **Daily risk limits:** a max daily loss, a max number of trades per day and
   a max number of open positions. When one is hit, BUY alerts pause.
 - **Market-wide backtest and auto-switch:** it replays every listed stock that
-  gapped, using only what's known at the open. Each morning it picks the
-  strategy with the best recent results, and needs at least 10 trades before
+  gapped, using only what's known at the open. Each morning it finds the
+  strategy with the best recent results (and switches to it in India), and needs at least 10 trades before
   judging one.
 - **Two markets with their own hours and calendars:** US (premarket gappers,
   ET) and India (NSE F&O, IST). Holidays and early closes are handled.

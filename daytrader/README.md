@@ -283,8 +283,9 @@ happened since, its levels, where the price sits against the entry, and when
 the dashboard saw it buyable. It includes setups that triggered while the
 dashboard was closed, as long as the stock is still in the latest scan.
 
-**Buyable now**, at the top of Picks, lists every BUY NOW setup across all 13
-strategies, **sorted by Expected R**, with a banner naming the **best one right
+**Buyable now**, at the top of Picks, lists every BUY NOW setup across all
+strategies except those in `hide_from_buyable` (nine in the US, none in India;
+your active strategy always shows), **sorted by Expected R**, with a banner naming the **best one right
 now**, or saying **"Nothing worth buying right now"** when no setup's expected
 R is above zero. The BUY NOW count and the monitor's BUY alerts cover your
 **active strategy only**, so the banner says when the best setup isn't yours.
@@ -571,10 +572,10 @@ or trails the best one by `margin_r` (0.15R). If everything is negative, it
 says so.
 
 **Each morning** the daily job re-runs the backtest, pushes a "Strategy check"
-with the top strategies, and, because `auto_switch: true` by default,
-**switches automatically** when the hint suggests it, pushing the reason. Set
-`auto_switch: false` to switch by hand, or `refresh_before_session: false` to
-skip the morning backtest.
+with the top strategies. With `auto_switch: true` (India) it also **switches
+automatically** when the hint suggests it, pushing the reason. In the US it's
+`false`, so you switch by hand, because a good 10 sessions didn't carry over in a
+60-session test. Set `refresh_before_session: false` to skip the morning backtest.
 
 **The backtest universe:** with Alpaca (US) or any India source, it replays
 the strongest gappers each day (up to 60 US / 40 India) from the whole market
@@ -637,6 +638,11 @@ now, and rerun this every week or two: a month or two of data is a small
 sample.
 
 ## Running automatically and alerts
+
+Before sending a BUY, the monitor checks the live price again, because working
+out the odds and news takes time. If the price is already at the stop or too far
+past the entry, it logs why and sends nothing. If checks fail 5 times in a row,
+your phone gets a "Monitor checks failing" push, and another when they recover.
 
 ```bash
 ./scripts/autostart.sh install         # US monitor 18:00, India 09:00 (local, Mon–Fri), dashboard always on
@@ -755,6 +761,14 @@ overrides any key for NSE.
 
 Keys and passwords go in `.env` (see `.env.example`). The theme is in
 `.streamlit/config.toml`.
+
+## Tests
+
+```bash
+.venv/bin/python tests/run_all.py
+```
+
+They use made-up data, can't reach the network and leave your real data alone.
 
 ## Limits to know
 

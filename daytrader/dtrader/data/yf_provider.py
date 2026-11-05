@@ -1,6 +1,7 @@
 """Free Yahoo Finance data (no key). Intraday may lag; 1-min history ~30 days."""
 from __future__ import annotations
 
+import gc
 import logging
 import time
 import warnings
@@ -151,6 +152,9 @@ class YFinanceIndiaProvider(YFinanceProvider):
                 d = d[BAR_COLS].dropna()
                 if len(d):
                     out[s] = d.tail(days)
+        # each download thread leaves yfinance's timezone cache open until a
+        # garbage collection, enough to hit the 256 open-file limit within hours
+        gc.collect()
         merged = {**(cached if ts > time.time() - 60 else {}), **out}
         self._batch_cache[key] = (time.time(), merged)
         return out

@@ -257,11 +257,15 @@ def candle_chart(cand, sig=None, watch=None, title=""):
 
 
 # ---------------- buyable today -------------------------------------------
+def hidden_buyable() -> set[str]:
+    return set(cfg.get("hide_from_buyable") or [])
+
+
 def buyable_today_section(df: pd.DataFrame) -> None:
     """Every setup that was buyable at some point today, not just the count."""
     from dtrader.portfolio import buyable_today
 
-    t = buyable_today(mk, df)
+    t = buyable_today(mk, df, hidden_buyable())
     st.markdown(ui.section("Buyable today", f"{len(t)} setups in {t['symbol'].nunique()} stocks"
                            if len(t) else "none yet"), unsafe_allow_html=True)
     if t.empty:
@@ -276,7 +280,7 @@ def buyable_today_section(df: pd.DataFrame) -> None:
                  height=min(420, 38 + 35 * len(show)),
                  column_config={"Entry": money, "Stop": money, "Max target": money, "Last": money,
                                 "Past entry": st.column_config.NumberColumn(format="%+.2fR")})
-    st.caption("All strategies, newest first. **Now** is what has happened since, as of the last scan. **Past entry** "
+    st.caption("Newest first. **Now** is what has happened since, as of the last scan. **Past entry** "
                "is where the last price sits against the entry, not what the trade would have made after its exits. "
                "**Seen buyable** is when the dashboard saw it buyable, so \"–\" means it wasn't open then, or the setup was gone before the next scan. "
                "A stock that left the scan keeps its last price from when it was seen.")
@@ -287,8 +291,9 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
     """Every setup that is buyable right now, across all strategies, with its odds."""
     bt = load_last_trades(mk)
     recent = strategy_hint(bt, cfg, names=names).table
-    b = buyable_now(df, strategy.name, recent)
-    st.markdown(ui.section("Buyable now", f"{len(b)} across all strategies"), unsafe_allow_html=True)
+    b = buyable_now(df, strategy.name, recent, hidden_buyable())
+    shown = len([n for n in names if n == strategy.name or n not in hidden_buyable()])
+    st.markdown(ui.section("Buyable now", f"{len(b)} across {shown} strategies"), unsafe_allow_html=True)
     if b.empty:
         closed = ui.market_state(mk)[0] == "Closed"
         st.markdown(ui.empty("Nothing is buyable right now"
@@ -412,7 +417,7 @@ def picks():
             st.session_state[key] = (df, cands, mk.now(), logs)
             from dtrader.portfolio import remember_buyable
 
-            remember_buyable(mk, buyable_now(df, strategy.name))
+            remember_buyable(mk, buyable_now(df, strategy.name, hidden=hidden_buyable()))
     df, cands, ts, logs = st.session_state[key]
     st.caption(f"Scanned {ts:%H:%M:%S} {mk.tz_label} · {logs[0] if logs else ''}")
     if df.empty:
@@ -583,7 +588,7 @@ with tab_mine:
     from dtrader.portfolio import recent_buyable, setup_key
 
     scan_df = st.session_state.get(f"scan_{mk.key}", (pd.DataFrame(),))[0]
-    setups = buyable_now(scan_df, strategy.name) if len(scan_df) else pd.DataFrame()
+    setups = buyable_now(scan_df, strategy.name, hidden=hidden_buyable()) if len(scan_df) else pd.DataFrame()
     current = {setup_key(r): r.to_dict() for _, r in setups.iterrows()}
     recent = {k: v for k, v in recent_buyable(mk, minutes=60).items() if k not in current}
     snap_key = f"buy_snap_{mk.key}"  # the setup you picked stays listed until you record or change it

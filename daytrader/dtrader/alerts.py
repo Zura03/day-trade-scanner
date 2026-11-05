@@ -7,8 +7,11 @@ which feeds the strategy-switch hint. Nothing here places orders.
 """
 from __future__ import annotations
 
+import errno
+import gc
 import json
 import os
+import resource
 import subprocess
 import sys
 import time as _time
@@ -25,6 +28,8 @@ from .markets import US, Market, get_market
 from .performance import journal_path
 from .scanner import analyse, gather_candidates, refresh_bars, session_day
 from .strategies import MAX_CHASE_R, Position, Strategy, get_strategy
+SLOW_TICK_SECONDS = 30
+FAILURES_TO_WARN = 5  # checks failed in a row before your phone hears about it
 COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "STOP": "\033[1;31m", "WATCH": "\033[1;33m",
           "INFO": "\033[1;36m"}
 NTFY_STYLE = {  # priority, emoji tag
@@ -58,7 +63,7 @@ def push_ntfy(kind: str, title: str, body: str, cfg: dict) -> bool:
                        headers={"Title": _title(kind, title, cfg.get("market", US)).encode("utf-8"),
                                 "Priority": prio, "Tags": tag})
         return r.status_code == 200
-    except httpx.HTTPError:
+    except (httpx.HTTPError, OSError):
         return False
 
 
@@ -68,20 +73,23 @@ def notify(kind: str, title: str, body: str, cfg: dict) -> None:
     stamp = m.now().strftime("%H:%M:%S")
     tag = "" if m is US else f"[{m.name}] "
     print(f"{COLORS.get(kind, '')}[{stamp} {m.tz_label}] {tag}{kind:5} {title}\033[0m  {body}", flush=True)
-    with open(alerts_path(m), "a") as f:
-        f.write(json.dumps({"time": m.now().isoformat(), "kind": kind, "title": title, "body": body}) + "\n")
-    if sys.platform == "darwin":
-        if a.get("desktop_notifications", True):
-            esc = lambda s: s.replace("\\", "\\\\").replace('"', '\\"')
-            subprocess.run(["osascript", "-e",
-                            f'display notification "{esc(body)}" with title "{esc(_title(kind, title, m))}"'],
-                           capture_output=True)
-        if a.get("sound", True) and kind in ("BUY", "SELL", "STOP"):
-            snd = "Glass" if kind == "BUY" else "Basso"
-            subprocess.Popen(["afplay", f"/System/Library/Sounds/{snd}.aiff"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        print("\a", end="", flush=True)
+    try:  # the log and desktop failing mustn't stop the phone push
+        with open(alerts_path(m), "a") as f:
+            f.write(json.dumps({"time": m.now().isoformat(), "kind": kind, "title": title, "body": body}) + "\n")
+        if sys.platform == "darwin":
+            if a.get("desktop_notifications", True):
+                esc = lambda s: s.replace("\\", "\\\\").replace('"', '\\"')
+                subprocess.run(["osascript", "-e",
+                                f'display notification "{esc(body)}" with title "{esc(_title(kind, title, m))}"'],
+                               capture_output=True)
+            if a.get("sound", True) and kind in ("BUY", "SELL", "STOP"):
+                snd = "Glass" if kind == "BUY" else "Basso"
+                subprocess.Popen(["afplay", f"/System/Library/Sounds/{snd}.aiff"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            print("\a", end="", flush=True)
+    except OSError as e:
+        print(f"alert not saved: {e}", file=sys.stderr, flush=True)
     push_ntfy(kind, title, body, cfg)
 
 
@@ -120,6 +128,7 @@ class Monitor:
 
     # -- one polling cycle ---------------------------------------------
     def tick(self) -> None:
+        started = _time.time()
         # pick up a strategy switch made from the dashboard / CLI
         active = load_config(self.m).get("active_strategy")
         if active and active != self.strategy.name:
@@ -150,6 +159,8 @@ class Monitor:
         self._manage_positions(day)
         self._check_my_positions(mine)
         self._save()
+        if _time.time() - started > SLOW_TICK_SECONDS:
+            print(f"slow check: {_time.time() - started:.0f}s", file=sys.stderr, flush=True)
 
     def _sync_broker(self) -> None:
         """Record buys/sells made at your broker and check their stop-loss
@@ -232,6 +243,7 @@ class Monitor:
         sh = self.strategy.position_size(s)
         if sh <= 0:
             return
+        started = _time.time()
         odds = ""
         if cand is not None:
             try:
@@ -254,11 +266,33 @@ class Monitor:
         except Exception as e:
             print(f"news {s.symbol}: {e}", file=sys.stderr, flush=True)
         odds += extra
+        # the odds and news above can take a while, and the price doesn't wait
+        now_px = self._live_price(s.symbol)
+        print(f"{s.symbol} signal {s.time:%H:%M}: odds and news took {_time.time() - started:.1f}s, "
+              f"price {last} then {now_px}", file=sys.stderr, flush=True)
+        if now_px is not None and (now_px <= s.stop or now_px - s.entry > MAX_CHASE_R * s.risk):
+            print(f"{s.symbol} BUY not sent: price {now_px} left the setup (entry {s.entry}, stop {s.stop})",
+                  file=sys.stderr, flush=True)
+            return
+        px = f" | last {now_px:.2f}" if now_px is not None else ""
         notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
                f"stop {s.stop:.2f} / max target {s.target:.2f} / {sh} sh "
-               f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{odds}", self.cfg)
+               f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{px}{odds}", self.cfg)
         self.state["positions"].append(Position.from_signal(s, sh).to_dict())
         taken[tkey] = taken.get(tkey, 0) + 1
+        self._save()  # a check failing later must not lose a trade you've been told about
+
+    def _live_price(self, symbol: str) -> float | None:
+        """The price right now, or None if unknown. Alpaca's free quotes are 15
+        minutes old, so they can't say the setup has gone."""
+        if self.p.name == "alpaca":
+            return None
+        try:
+            px = float(self.p.quotes([symbol]).loc[symbol, "last"])
+            return px if px > 0 else None
+        except Exception as e:
+            print(f"live price {symbol}: {e}", file=sys.stderr, flush=True)
+            return None
 
     def _manage_positions(self, day) -> None:
         still_open = []
@@ -356,6 +390,13 @@ def _broker_if_ready(broker: str, cfg: dict | None = None) -> DataProvider | Non
         return None
 
 
+def _raise_open_file_limit(want: int = 4096) -> None:
+    """launchd starts jobs with a limit of 256 open files, which a long session can reach."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < want:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (want if hard == resource.RLIM_INFINITY else min(want, hard), hard))
+
+
 def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: bool = False) -> None:
     """session=True (used by the daily background job): exit right away on
     market holidays/weekends, and exit 5 minutes after today's close."""
@@ -371,6 +412,7 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
         if m.now() >= close_at:  # e.g. Mac woke up after the close
             print(f"[{m.now():%Y-%m-%d %H:%M} {m.tz_label}] Today's {m.name} session is already over.", flush=True)
             return
+    _raise_open_file_limit()
     mon = Monitor(provider, cfg)
     notify("INFO", "Monitor started",
            f"strategy={mon.strategy.title}, data={provider.name}, every {poll}s"
@@ -397,6 +439,7 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
     last_broker_check = _time.time()
     recheck = 120
     failures = 0
+    failed_in_a_row = 0
     while True:
         now = m.now()
         if close_at and now >= close_at:
@@ -413,10 +456,18 @@ def run_monitor(provider: DataProvider, cfg: dict, once: bool = False, session: 
         if once or in_session(now, m):
             try:
                 mon.tick()
-                failures = 0
+                if failed_in_a_row >= FAILURES_TO_WARN:
+                    notify("INFO", "Monitor checks working again", f"After {failed_in_a_row} failed checks", cfg)
+                failures = failed_in_a_row = 0
             except Exception as e:
                 failures += 1
+                failed_in_a_row += 1
                 print(f"tick error: {e}", file=sys.stderr, flush=True)
+                if isinstance(e, OSError) and e.errno == errno.EMFILE:
+                    gc.collect()
+                if failed_in_a_row == FAILURES_TO_WARN:
+                    notify("INFO", "Monitor checks failing", f"{str(e)[:120]}. No trade alerts until this clears. "
+                           "Watch any open positions yourself.", cfg)
                 if m.key == "india" and mon.p.name in ("fyers", "groww", "kite") and failures >= 2:
                     from .data.yf_provider import YFinanceIndiaProvider
 

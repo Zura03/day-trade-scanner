@@ -90,7 +90,15 @@ switch_hint:
   # over lookback_days and push the result to your phone...
   refresh_before_session: true
   # ...and switch the active strategy automatically when the hint suggests it.
-  auto_switch: true
+  # Off for the US: on 60 sessions, a good stretch didn't carry over (Bull Flag
+  # went from +0.10R to -0.25R). India turns it on below.
+  auto_switch: false
+
+# Left out of Buyable now and Buyable today, unless one is the active strategy.
+# All negative over the last 60 sessions, in both halves. Still backtested, so
+# the switch hint shows it if one recovers.
+hide_from_buyable: [orb, orb_retest, opening_reversal, vwap_reclaim, gap_down_bounce,
+                    stop_hunt, vwap_bounce, oversold_bounce, first_hour_trend]
 
 # --- Alerts ------------------------------------------------------------
 alerts:
@@ -169,6 +177,10 @@ india:
     breakeven_after_r: 1.0
     time_exit: "15:10"        # brokers auto square-off intraday (MIS) ~15:20
     no_new_entries_after: "13:00"
+
+  switch_hint:
+    auto_switch: true
+  hide_from_buyable: []
 
   strategies:
     gap_and_go:

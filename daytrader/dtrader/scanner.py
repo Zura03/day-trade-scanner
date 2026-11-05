@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -240,13 +241,15 @@ def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: dat
     return df, cands
 
 
-def buyable_now(df: pd.DataFrame, active: str, recent: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Every BUY NOW setup across all strategies, best first: your active
-    strategy, then strategies with the best recent R per trade, then the
-    least extended (closest to entry). `recent` is the switch-hint table."""
+def buyable_now(df: pd.DataFrame, active: str, recent: pd.DataFrame | None = None,
+                hidden: Collection[str] = ()) -> pd.DataFrame:
+    """Every BUY NOW setup across all strategies but `hidden`, best first: your
+    active strategy (never hidden), then strategies with the best recent R per
+    trade, then the least extended (closest to entry). `recent` is the
+    switch-hint table."""
     if df.empty:
         return df
-    b = df[df["status"] == "BUY NOW"].copy()
+    b = df[(df["status"] == "BUY NOW") & (~df["strategy"].isin(hidden) | (df["strategy"] == active))].copy()
     if b.empty:
         return b
     b["active"] = b["strategy"] == active
