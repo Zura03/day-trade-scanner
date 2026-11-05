@@ -176,9 +176,17 @@ with st.sidebar:
     st.caption("Educational tool, not financial advice. Always trade with a stop.")
 
 strategy = get_strategy(cfg["active_strategy"], cfg)
-_scan = st.session_state.get(f"scan_{mk.key}")
-st.markdown(ui.header(mk, prov.name, strategy.title,
-                      f"{_scan[2]:%H:%M} {mk.tz_label}" if _scan else None), unsafe_allow_html=True)
+header_slot = st.empty()  # picks() redraws it: a scan reruns only that fragment, not the header above it
+
+
+def draw_header():
+    scan_result = st.session_state.get(f"scan_{mk.key}")
+    header_slot.markdown(ui.header(mk, prov.name, strategy.title,
+                                   f"{scan_result[2]:%H:%M} {mk.tz_label}" if scan_result else None),
+                         unsafe_allow_html=True)
+
+
+draw_header()
 tab_picks, tab_mine, tab_bt, tab_hint, tab_alerts, tab_guide, tab_settings = st.tabs(
     ["Picks", "My positions", "Backtest", "Switch hint", "Alerts", "Strategies", "Settings"],
     key="main_tab")  # keyed so the selected tab survives reruns (form inputs, buttons)
@@ -417,6 +425,7 @@ def picks():
             st.session_state[key] = (df, cands, mk.now(), logs)
             from dtrader.portfolio import remember_buyable
 
+            draw_header()
             remember_buyable(mk, buyable_now(df, strategy.name, hidden=hidden_buyable()))
     df, cands, ts, logs = st.session_state[key]
     st.caption(f"Scanned {ts:%H:%M:%S} {mk.tz_label} · {logs[0] if logs else ''}")

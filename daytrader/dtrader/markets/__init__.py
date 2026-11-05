@@ -117,7 +117,8 @@ MARKETS = {m.key: m for m in (US, INDIA)}
 def get_market(key: str | Market | None) -> Market:
     if isinstance(key, Market):
         return key
-    key = (key or "us").lower()
+    # a dashboard page open across a code reload still holds a Market of the old class
+    key = (getattr(key, "key", key) or "us").lower()
     if key in ("in", "nse", "indian"):
         key = "india"
     if key not in MARKETS:
