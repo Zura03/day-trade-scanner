@@ -414,21 +414,46 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
 
 
 # ---------------- picks ---------------------------------------------------
+def data_age(cands, ts) -> str:
+    """' · prices X old, bars Y old': a source may reuse data for a few minutes, so a
+    rescan can show the same numbers. Median over the candidates."""
+    if not cands:
+        return ""
+
+    def ago(secs: list[float]) -> str:
+        s = sorted(secs)[len(secs) // 2]
+        return "under 1 min" if s < 60 else f"{s / 60:.0f} min"
+
+    now = ts.timestamp()
+    bars = [now - (c.bars.index[-1] + pd.Timedelta(minutes=1)).timestamp() for c in cands if len(c.bars)]
+    priced = [now - c.price_at if c.price_at else now - (c.bars.index[-1] + pd.Timedelta(minutes=1)).timestamp()
+              for c in cands if c.price_at or len(c.bars)]
+    if not bars or ago(bars) == "under 1 min":
+        return ""  # nothing worth saying: the data is current
+    return f" · prices {ago(priced)} old, bars {ago(bars)} old"
+
+
 @st.fragment(run_every=60 if auto else None)
 def picks():
     strats = all_strategies(cfg)  # always analyse all: cheap once bars are fetched
     key = f"scan_{mk.key}"
-    if st.button("Scan now", type="primary", icon=":material/refresh:") or key not in st.session_state or auto:
+    clicked = st.button("Scan now", type="primary", icon=":material/refresh:")
+    if clicked or key not in st.session_state or auto:
         with st.spinner("Scanning movers..."):
             logs = []
-            df, cands = scan(prov, cfg, strats, log=logs.append)
+            # a click wants today's prices; auto-refresh reuses quotes the monitor fetched (Fyers' daily limit)
+            prov.quote_max_age = 60 if clicked else None
+            try:
+                df, cands = scan(prov, cfg, strats, log=logs.append)
+            finally:
+                prov.quote_max_age = None
             st.session_state[key] = (df, cands, mk.now(), logs)
             from dtrader.portfolio import remember_buyable
 
             draw_header()
             remember_buyable(mk, buyable_now(df, strategy.name, hidden=hidden_buyable()))
     df, cands, ts, logs = st.session_state[key]
-    st.caption(f"Scanned {ts:%H:%M:%S} {mk.tz_label} · {logs[0] if logs else ''}")
+    st.caption(f"Scanned {ts:%H:%M:%S} {mk.tz_label}{data_age(cands, ts)} · {logs[0] if logs else ''}")
     if df.empty:
         st.markdown(ui.empty("No stocks pass the filters right now (price, size of move, relative volume)."),
                     unsafe_allow_html=True)

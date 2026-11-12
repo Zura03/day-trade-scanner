@@ -25,6 +25,7 @@ class Candidate:
     rel_volume: float
     source: str                   # "movers" | "watchlist" | "history"
     results: dict = field(default_factory=dict)   # strategy -> analysis dict
+    price_at: float | None = None  # when `last` was quoted (epoch), if newer than the bars
 
 
 def session_day(provider: DataProvider) -> date:
@@ -183,9 +184,11 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
         ctx = build_context(sym, day, bars, prev_close, avg_vol, fl, market=m,
                             premarket_volume_known=provider.premarket_volume_known,
                             prev_high=ph, prev_low=pl)
-        last = float(bars["close"].iloc[-1])
+        price_at = float(q.at[sym, "as_of"]) if "as_of" in q.columns else None
+        if price_at is None or price_at <= (bars.index[-1] + pd.Timedelta(minutes=1)).timestamp():
+            last, price_at = float(bars["close"].iloc[-1]), None  # the bars are as fresh as the quote
         rel = float(bars["volume"].sum() / avg_vol) if avg_vol else rv
-        out.append(Candidate(sym, ctx, add_indicators(bars, m), last, rel, sources[sym]))
+        out.append(Candidate(sym, ctx, add_indicators(bars, m), last, rel, sources[sym], price_at=price_at))
     record_history(day, [c.symbol for c in out if c.source == "movers"], m)
     return out
 

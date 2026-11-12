@@ -310,8 +310,8 @@ class FyersProvider(DataProvider):
             if len(prior):
                 avg[s] = float(prior["volume"].tail(10).mean())
         snap = self._shared_quotes(symbols)
-        rows = [{"symbol": s, "last": q[1], "prev_close": q[2], "volume": q[3], "avg_volume": avg.get(s, 0.0)}
-                for s, q in snap.items()]
+        rows = [{"symbol": s, "last": q[1], "prev_close": q[2], "volume": q[3], "avg_volume": avg.get(s, 0.0),
+                 "as_of": q[0]} for s, q in snap.items()]
         if not rows:
             raise RuntimeError("Fyers returned no prices (token expired or API down)")
         return pd.DataFrame(rows).set_index("symbol")
@@ -332,7 +332,8 @@ class FyersProvider(DataProvider):
             except (OSError, json.JSONDecodeError):
                 snap = {}
             now = _time.time()
-            stale = [s for s in symbols if s not in snap or snap[s][0] < now - QUOTE_TTL]
+            ttl = QUOTE_TTL if self.quote_max_age is None else min(QUOTE_TTL, self.quote_max_age)
+            stale = [s for s in symbols if s not in snap or snap[s][0] < now - ttl]
             try:
                 for i in range(0, len(stale), 50):
                     d = self._get("/quotes", {"symbols": ",".join(fyers_symbol(s) for s in stale[i:i + 50])}, source="quotes")

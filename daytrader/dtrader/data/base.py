@@ -68,6 +68,7 @@ class DataProvider(ABC):
     name = "base"
     market: Market = US
     premarket_volume_known = True   # False when the source reports 0 for premarket volume
+    quote_max_age: float | None = None  # seconds: set for one scan to want fresher quotes than a source reuses
 
     # ---- required -----------------------------------------------------
     @abstractmethod
