@@ -11,7 +11,7 @@ import pandas as pd
 import yfinance as yf
 
 from ..markets import INDIA, india_fo_symbols
-from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, rank_movers, read_cache, to_tz_index
+from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, rank_movers, read_cache, release_yahoo, to_tz_index
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore", module="yfinance")
@@ -75,6 +75,7 @@ class YFinanceProvider(DataProvider):
                 })
             except Exception:
                 continue
+        release_yahoo()
         return pd.DataFrame(rows).set_index("symbol") if rows else pd.DataFrame(
             columns=["last", "prev_close", "volume", "avg_volume"]
         )

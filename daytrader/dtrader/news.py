@@ -22,6 +22,7 @@ from html import unescape
 import httpx
 
 from .config import alpaca_keys
+from .data.base import release_yahoo
 from .markets import Market
 
 UA = {"User-Agent": "Mozilla/5.0 (day-trade-scanner)"}
@@ -105,6 +106,8 @@ def _company_name(symbol: str, m: Market) -> str:
             name = info.get("longName") or info.get("shortName") or symbol
         except Exception:
             pass
+        finally:
+            release_yahoo()
         names[symbol] = re.sub(r"\s+(Limited|Ltd\.?|Ltd|Corporation|Company)$", "", name.strip(), flags=re.I)
         path.write_text(json.dumps(names, indent=1))
     return names[symbol]
@@ -152,6 +155,8 @@ def earnings_date(symbol: str, m: Market) -> date | None:
         d = dates[0] if dates else None
     except Exception:
         pass
+    finally:
+        release_yahoo()
     cache[symbol] = {"checked": today, "date": d.isoformat() if d else None}
     path.write_text(json.dumps(cache))
     return d

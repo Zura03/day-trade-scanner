@@ -174,8 +174,22 @@ class DataProvider(ABC):
             out[s] = val
             dirty = True
         if dirty:
+            release_yahoo()
             FLOAT_CACHE.write_text(json.dumps(cache))
         return out
+
+
+def release_yahoo() -> None:
+    """Drop yfinance's cache of its last 64 responses. Each cached response keeps
+    the connection handle of the thread that fetched it (2 pipes and its sockets),
+    and the dashboard runs every rerun in a new thread: kept, they pile up until
+    the process runs out of open files and can't even serve its own page."""
+    try:
+        from yfinance.data import YfData
+
+        YfData().cache_get.cache_clear()
+    except Exception:
+        pass
 
 
 def to_tz_index(df: pd.DataFrame, tz: ZoneInfo = NY) -> pd.DataFrame:
