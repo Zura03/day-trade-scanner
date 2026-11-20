@@ -26,13 +26,15 @@ def net_r(j: pd.DataFrame, cfg: dict) -> pd.Series:
     c = trade_costs(cfg, cfg["market"])
     out = []
     for r in j.itertuples():
-        entry = r.entry + max(r.entry * c["slippage"], c["tick"])
-        exit_ = r.exit_price - max(r.exit_price * c["slippage"], c["tick"])
+        side = int(getattr(r, "side", 1) or 1)  # costs always work against you: shorts mirror them
+        side = 1 if side != side else side      # NaN from older journal rows
+        entry = r.entry + side * max(r.entry * c["slippage"], c["tick"])
+        exit_ = r.exit_price - side * max(r.exit_price * c["slippage"], c["tick"])
         sh = int(getattr(r, "shares", 0) or 0)
         if sh > 0:
-            fee = c["fees"](sh * entry)
-            entry, exit_ = entry + fee.buy_side / sh, exit_ - fee.sell_side / sh
-        out.append((exit_ - entry) / max(entry - r.initial_stop, 1e-9))
+            fee = c["fees"](sh * entry, sh, r.symbol)
+            entry, exit_ = entry + side * fee.buy_side / sh, exit_ - side * fee.sell_side / sh
+        out.append(side * (exit_ - entry) / max(side * (entry - r.initial_stop), 1e-9))
     return pd.Series(out, index=j.index)
 
 

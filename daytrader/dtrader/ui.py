@@ -82,6 +82,7 @@ section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{ font-si
 
 STATUS_STYLE = {          # table cell styles for scan status (text, not filled blocks)
     "BUY NOW": f"color:{GOOD};font-weight:600",
+    "SHORT NOW": f"color:{GOOD};font-weight:600",
     "SETTING UP": f"color:{WARN};font-weight:600",
     "qualifies": f"color:{INK_2}",
     "no setup": f"color:{MUTED}",

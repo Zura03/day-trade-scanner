@@ -65,7 +65,14 @@ def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.
     """Replay one session. Slippage is `slippage` of the price per side, at
     least `tick`. With `fees` (value -> costs.Cost) the trade is sized in real
     shares: setups you couldn't buy `min_shares` of are skipped, and the
-    broker + statutory charges are folded into the entry and exit prices."""
+    broker + statutory charges are folded into the entry and exit prices.
+    A short replays as its long on the mirrored chart (dtrader.mirror)."""
+    if getattr(strategy, "side", 1) < 0:
+        from .mirror import mirror_bars, mirror_ctx, mirror_position
+
+        pivot = ctx.prev_close
+        longs = simulate_day(strategy.base, mirror_bars(df, pivot), mirror_ctx(ctx), slippage, fees, min_shares, tick)
+        return [mirror_position(p, pivot, strategy.name) for p in longs]
     trades: list[Position] = []
     max_trades = strategy.max_trades_per_day
     sigs = strategy.entries(df, ctx)
@@ -206,7 +213,7 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
                         "stop": round(p.initial_stop, 4), "target": round(p.target, 4),
                         "exit_time": p.exit_time, "exit": round(p.exit_price, 4),
                         "reason": p.exit_reason, "r": round(p.r_multiple, 3),
-                        "shares": p.shares, "pnl": round((p.exit_price - p.entry) * p.shares, 2),
+                        "shares": p.shares, "pnl": round(p.pnl, 2), "side": p.side,
                         "gap_pct": round(ctx.gap_pct, 1),
                     })
         log(f"  ...{n}/{len(plan)} sessions ({dd}: {len(plan[dd])} gappers)")

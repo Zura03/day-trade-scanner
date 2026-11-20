@@ -13,12 +13,12 @@ import streamlit as st  # noqa: E402
 from dtrader.alerts import load_alerts  # noqa: E402
 from dtrader.backtest import load_last_trades, run_backtest, summarize  # noqa: E402
 from dtrader.config import load_config, load_state, set_active_strategy  # noqa: E402
-from dtrader.futures import lot_units  # noqa: E402
+from dtrader.futures import lot_units, qty_text  # noqa: E402
 from dtrader.markets import MARKETS  # noqa: E402
 from dtrader.data import get_provider  # noqa: E402
 from dtrader.performance import load_journal, strategy_hint  # noqa: E402
 from dtrader.scanner import buyable_now, scan  # noqa: E402
-from dtrader.strategies import REGISTRY, all_strategies, get_strategy  # noqa: E402
+from dtrader.strategies import LONG, REGISTRY, all_strategies, get_strategy, strategy_names  # noqa: E402
 from dtrader import ui  # noqa: E402
 
 st.set_page_config(page_title="Day Trade Scanner", page_icon=":material/candlestick_chart:", layout="wide")
@@ -143,7 +143,7 @@ with st.sidebar:
     if source == "schwab" and prov.name != "schwab":
         st.warning(f"Schwab login missing or expired - using {prov.name} data. Run  ./run.sh auth")
 
-    names = list(REGISTRY)
+    names = strategy_names(cfg)
     # Per-market widget so a choice never carries over to the other market; and
     # resync when the CLI/monitor/hint changed it, so stale widget state can't
     # write an old choice back.
@@ -469,7 +469,8 @@ def picks():
     st.markdown(ui.section(f"{strategy.title} scan" if not compare else "All strategies",
                            f"{view['symbol'].nunique()} candidates"), unsafe_allow_html=True)
     st.markdown(ui.tiles([
-        ("Buy now", str(int((view["status"] == "BUY NOW").sum())), strategy.title if not compare else "all strategies"),
+        ("Buy / short now" if cfg.get("allow_short") else "Buy now", str(int((view["status"] == "BUY NOW").sum())),
+         strategy.title if not compare else "all strategies"),
         ("Setting up", str(int((view["status"] == "SETTING UP").sum())),
          f"within {cfg['universe'].get('near_trigger_pct', 5):g}% of trigger"),
         ("Triggered today", str(int(view["status"].str.startswith("triggered").sum())), "no longer buyable"),
@@ -479,6 +480,8 @@ def picks():
                                  "day_%": "Day", "rel_vol": "Rel vol", "float_M": "Float (M)", "entry": "Entry",
                                  "stop": "Stop", "target": "Max target", "shares": "Shares", "why": "Setup"})
     table["Strategy"] = [REGISTRY[n].title for n in view["strategy"]]
+    if "side" in view:  # status BUY NOW means "enter now"; a short enters by selling
+        table["Status"] = view["status"].where(~((view["side"] < 0) & (view["status"] == "BUY NOW")), "SHORT NOW")
     if mk.futures:  # lots / contracts, or why it can't be sized
         table["Shares"] = view["size"].fillna("")
     cols = ["Symbol", "Strategy", "Status", "Last", "Gap", "Day", "Rel vol"] + \
@@ -576,7 +579,9 @@ with tab_mine:
             ("Holding", str(sum(a.action == "HOLD" for _, a in advice)), None),
         ]), unsafe_allow_html=True)
         st.dataframe(pd.DataFrame([{
-            "Action": a.action, "Symbol": r["symbol"], "Shares": r["shares"], "Bought": r["entry"],
+            "Action": ("COVER NOW" if a.action == "SELL NOW" else a.action) if int(r.get("side", 1)) < 0 else a.action,
+            "Symbol": r["symbol"] + (" (short)" if int(r.get("side", 1)) < 0 else ""),
+            "Shares": qty_text(mk, r["symbol"], r["shares"]) if mk.futures else r["shares"], "Bought": r["entry"],
             "At": r["entry_time"][11:16], "Last": a.last, "P&L": a.pnl, "R": a.r_now,
             "Stop now": a.stop, "Target": r["target"], "Why": a.reason,
             "Strategy": REGISTRY[r["strategy"]].title if r["strategy"] in REGISTRY else "Manual",
@@ -589,11 +594,13 @@ with tab_mine:
                    "+1R sell on a 1-min close below the 9 EMA; flat by "
                    f"{cfg.get('exits', {}).get('time_exit')}. The monitor pushes a SELL alert when one triggers.")
         for r, a in advice:
-            with st.expander(f"{a.action} · {r['symbol']} · {r['shares']} sh @ {r['entry']:.2f}",
+            short = int(r.get("side", 1)) < 0
+            with st.expander(f"{'SHORT · ' if short else ''}{a.action} · {r['symbol']} · "
+                             f"{qty_text(mk, r['symbol'], r['shares'])} @ {r['entry']:.2f}",
                              icon=":material/sell:" if a.action == "SELL NOW" else ":material/trending_up:"):
                 c1, c2 = st.columns(2)
                 with c1:
-                    px = st.number_input("Sold at", value=float(a.last or r["entry"]), step=0.05,
+                    px = st.number_input("Bought back at" if short else "Sold at", value=float(a.last or r["entry"]), step=0.05,
                                          format="%.2f", key=f"sellpx_{r['id']}")
                     if st.button("Record sale", key=f"sell_{r['id']}", type="primary"):
                         done = record_sell(mk, r["id"], px, reason=a.reason if a.action == "SELL NOW" else "sold early")
@@ -663,18 +670,23 @@ with tab_mine:
             sh = int(sh) if sh == sh and sh else 0
             if mk.futures:  # the form takes lots / contracts
                 sh = sh // max(lot_units(mk, r["symbol"]), 1)
+            side = r.get("side", 1)
             pref = {"sym": r["symbol"], "px": px, "stop": float(r["stop"]), "tgt": float(r["target"]),
-                    "sh": max(sh, 1), "strat": r["strategy"]}
+                    "sh": max(sh, 1), "strat": r["strategy"], "side": -1 if side == side and side < 0 else 1}
         else:
             st.session_state.pop(snap_key, None)
         st.session_state[f"buy_pref_{mk.key}"] = pref
     pref = st.session_state.get(f"buy_pref_{mk.key}", {})
     fk = f"{mk.key}_{st.session_state.get(f'buy_form_n_{mk.key}', 0)}"
+    side = 1
+    if cfg.get("allow_short"):  # futures: a short is sold first and bought back
+        side = st.segmented_control("Direction", [1, -1], default=pref.get("side", 1), key=f"b_side_{fk}",
+                                    format_func=lambda v: "Buy (long)" if v > 0 else "Sell (short)") or 1
     c1, c2, c3 = st.columns(3)
     sym = c1.text_input("Symbol", value=pref.get("sym", ""), key=f"b_sym_{fk}").upper().strip()
     qty_word = {"india": "Lots", "us": "Contracts"}[mk.region] if mk.futures else "Shares"
     shares = c2.number_input(qty_word, min_value=1, step=1, value=pref.get("sh", 1), key=f"b_sh_{fk}")
-    price = c3.number_input(f"Buy price ({cur})", min_value=0.0, step=0.05, format="%.2f",
+    price = c3.number_input(f"{'Buy' if side > 0 else 'Short'} price ({cur})", min_value=0.0, step=0.05, format="%.2f",
                             value=pref.get("px", 0.0), key=f"b_px_{fk}")
     c4, c5, c6 = st.columns(3)
     stop = c4.number_input("Stop", min_value=0.0, step=0.05, format="%.2f", value=pref.get("stop", 0.0),
@@ -695,7 +707,7 @@ with tab_mine:
             units = int(shares) * (lot_units(mk, sym) if mk.futures else 1)  # stored in units: P&L per point
             if units <= 0:
                 raise ValueError(f"No futures contract found for {sym}")
-            row = add_buy(mk, sym, units, price, stop, target, strat,
+            row = add_buy(mk, sym, units, price, stop, target, strat, side=side,
                           when=_dt.combine(mk.now().date(), when, mk.tz))
             st.session_state.pop(snap_key, None)
             st.toast(f"Tracking {row['shares']} {row['symbol']} @ {row['entry']:.2f}")
@@ -829,7 +841,10 @@ with tab_alerts:
 # ---------------- guide ---------------------------------------------------
 with tab_guide:
     cols = st.columns(2)
-    for k, (n, cls) in enumerate(REGISTRY.items()):
+    if cfg.get("allow_short"):
+        st.caption("Each strategy also runs as a short (named '... (short)'): the same rules on the chart turned "
+                   "upside down around the previous close, so a breakout becomes a breakdown.")
+    for k, (n, cls) in enumerate(LONG.items()):
         with cols[k % 2].container(border=True):
             badge = ui.pill("Active", ui.ACCENT) if n == cfg["active_strategy"] else ""
             st.markdown(f'<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">'

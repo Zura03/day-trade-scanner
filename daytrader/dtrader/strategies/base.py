@@ -35,10 +35,16 @@ class Signal:
     stop: float
     target: float
     reason: str
+    side: int = 1                 # 1 long (buy), -1 short (sell first, buy back)
+    pivot: float | None = None    # shorts: the price the chart was mirrored around (dtrader.mirror)
 
     @property
     def risk(self) -> float:
-        return self.entry - self.stop
+        return self.side * (self.entry - self.stop)
+
+    @property
+    def action(self) -> str:
+        return "BUY" if self.side > 0 else "SHORT"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -61,20 +67,35 @@ class Position:
     exit_reason: str | None = None
     trailing: bool = False
     notes: list = field(default_factory=list)
+    side: int = 1                 # -1: a short, managed on the mirrored chart (dtrader.mirror)
+    pivot: float | None = None
 
     @classmethod
     def from_signal(cls, s: Signal, shares: int = 0) -> "Position":
-        return cls(s.symbol, s.strategy, s.time, s.entry, s.stop, s.target, s.stop, shares)
+        return cls(s.symbol, s.strategy, s.time, s.entry, s.stop, s.target, s.stop, shares,
+                   side=s.side, pivot=s.pivot)
+
+    def fresh(self) -> "Position":
+        """The trade as it was opened, to replay from the start."""
+        return Position(self.symbol, self.strategy, self.entry_time, self.entry, self.initial_stop, self.target,
+                        self.initial_stop, self.shares, side=self.side, pivot=self.pivot)
 
     @property
     def risk(self) -> float:
-        return max(self.entry - self.initial_stop, 1e-9)
+        return max(self.side * (self.entry - self.initial_stop), 1e-9)
 
     @property
     def r_multiple(self) -> float | None:
         if self.exit_price is None:
             return None
-        return (self.exit_price - self.entry) / self.risk
+        return self.side * (self.exit_price - self.entry) / self.risk
+
+    @property
+    def pnl(self) -> float | None:
+        """Money made or lost per the whole position (units x points)."""
+        if self.exit_price is None:
+            return None
+        return self.side * (self.exit_price - self.entry) * self.shares
 
     @property
     def is_open(self) -> bool:
@@ -112,7 +133,15 @@ class Position:
 
     def replay(self, bars: pd.DataFrame, exits: dict) -> "Position":
         """Run the trade forward through `bars` (entry-bar stop check, then
-        stop/target/trailing/time exits). Used by the scanner and the monitor."""
+        stop/target/trailing/time exits). Used by the scanner and the monitor.
+        A short replays as a long on the mirrored chart."""
+        if self.side < 0:
+            from ..mirror import mirror_bars, mirror_position
+
+            done = mirror_position(self, self.pivot).replay(mirror_bars(bars, self.pivot), exits)
+            back = mirror_position(done, self.pivot)
+            self.__dict__.update(back.__dict__)
+            return self
         if self.entry_time in bars.index:
             self.check_entry_bar(bars.loc[self.entry_time])
         for ts, bar in bars[bars.index > self.entry_time].iterrows():

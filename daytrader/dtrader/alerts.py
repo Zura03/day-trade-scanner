@@ -32,10 +32,12 @@ from .strategies import MAX_CHASE_R, Position, Strategy, get_strategy
 SLOW_TICK_SECONDS = 30
 FAILURES_TO_WARN = 5  # checks failed in a row before your phone hears about it
 COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "STOP": "\033[1;31m", "WATCH": "\033[1;33m",
-          "INFO": "\033[1;36m"}
+          "INFO": "\033[1;36m", "SHORT": "\033[1;35m", "COVER": "\033[1;31m"}
 NTFY_STYLE = {  # priority, emoji tag
     "BUY": ("high", "chart_with_upwards_trend"),
     "SELL": ("high", "money_with_wings"),
+    "SHORT": ("high", "chart_with_downwards_trend"),   # futures: sell first...
+    "COVER": ("high", "money_with_wings"),             # ...and buy back
     "STOP": ("high", "warning"),        # stop-loss order missing / leftover in Fyers
     "WATCH": ("default", "eyes"),
     "INFO": ("low", "information_source"),
@@ -55,7 +57,7 @@ def push_ntfy(kind: str, title: str, body: str, cfg: dict) -> bool:
     secret, so it lives in .env as NTFY_TOPIC, not in config.yaml."""
     a = cfg.get("alerts", {})
     topic = os.environ.get("NTFY_TOPIC")
-    if not topic or kind not in a.get("ntfy_kinds", ["BUY", "SELL", "STOP", "WATCH", "INFO"]):
+    if not topic or kind not in a.get("ntfy_kinds", ["BUY", "SELL", "SHORT", "COVER", "STOP", "WATCH", "INFO"]):
         return False
     prio, tag = NTFY_STYLE.get(kind, ("default", "bell"))
     try:
@@ -220,7 +222,9 @@ class Monitor:
                     notify("INFO", f"Your {row['symbol']}: {note}", f"stop now {adv.stop:.2f}", self.cfg)
             if adv.action == "SELL NOW" and not self._seen(f"mine-sell|{row['id']}"):
                 pnl = self.m.fmt_money(adv.pnl) if adv.pnl is not None else "?"
-                notify("SELL", f"Sell your {row['shares']} {row['symbol']}",
+                short = int(row.get("side", 1)) < 0
+                notify("COVER" if short else "SELL",
+                       f"{'Cover your short' if short else 'Sell your'} {qty_text(self.m, row['symbol'], row['shares'])} {row['symbol']}",
                        f"{adv.reason}. Last {adv.last:.2f}, {adv.r_now:+.2f}R, {pnl}. "
                        "Record the sale in the dashboard (My positions).", self.cfg)
 
@@ -237,8 +241,8 @@ class Monitor:
         tkey = f"{day}|{s.symbol}"
         if s.symbol in open_syms or taken.get(tkey, 0) >= self.strategy.max_trades_per_day:
             return
-        fill = max(s.entry, last)
-        if fill - s.entry > MAX_CHASE_R * s.risk:  # analyse() normally filters this already
+        fill = max(s.entry, last) if s.side > 0 else min(s.entry, last)
+        if s.side * (fill - s.entry) > MAX_CHASE_R * s.risk:  # analyse() normally filters this already
             return
         s.entry = round(fill, 4)
         sh = self.strategy.position_size(s)
@@ -271,13 +275,13 @@ class Monitor:
         now_px = self._live_price(s.symbol)
         print(f"{s.symbol} signal {s.time:%H:%M}: odds and news took {_time.time() - started:.1f}s, "
               f"price {last} then {now_px}", file=sys.stderr, flush=True)
-        if now_px is not None and (now_px <= s.stop or now_px - s.entry > MAX_CHASE_R * s.risk):
-            print(f"{s.symbol} BUY not sent: price {now_px} left the setup (entry {s.entry}, stop {s.stop})",
+        if now_px is not None and (s.side * (now_px - s.stop) <= 0 or s.side * (now_px - s.entry) > MAX_CHASE_R * s.risk):
+            print(f"{s.symbol} {s.action} not sent: price {now_px} left the setup (entry {s.entry}, stop {s.stop})",
                   file=sys.stderr, flush=True)
             return
         px = f" | last {now_px:.2f}" if now_px is not None else ""
         size = self.strategy.size_text(s) if self.m.futures else f"{sh} sh"
-        notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
+        notify(s.action, f"{s.symbol} @ {s.entry:.2f}",
                f"stop {s.stop:.2f} / max target {s.target:.2f} / {size} "
                f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{px}{odds}", self.cfg)
         self.state["positions"].append(Position.from_signal(s, sh).to_dict())
@@ -312,8 +316,7 @@ class Monitor:
                 still_open.append(d)
                 continue
             # replay from a fresh copy of the original trade each time
-            replay = Position(p.symbol, p.strategy, p.entry_time, p.entry, p.initial_stop,
-                              p.target, p.initial_stop, p.shares).replay(bars, strat.exits)
+            replay = p.fresh().replay(bars, strat.exits)
             for note in replay.notes[len(p.notes):]:
                 if not self._seen(f"note|{p.symbol}|{p.entry_time}|{note}"):
                     notify("INFO", f"{p.symbol}: {note.split(' ', 1)[1]}",
@@ -321,9 +324,9 @@ class Monitor:
             if replay.is_open:
                 still_open.append(replay.to_dict())
                 continue
-            pnl = (replay.exit_price - replay.entry) * replay.shares
+            pnl = replay.pnl
             if not self._seen(f"sell|{p.symbol}|{p.entry_time}"):
-                notify("SELL", f"{p.symbol} @ {replay.exit_price:.2f} ({replay.exit_reason})",
+                notify("SELL" if replay.side > 0 else "COVER", f"{p.symbol} @ {replay.exit_price:.2f} ({replay.exit_reason})",
                        f"{replay.r_multiple:+.2f}R, {self.m.fmt_money(pnl)} on {qty_text(self.m, p.symbol, replay.shares)} "
                        f"(entry {replay.entry:.2f})", self.cfg)
             with open(journal_path(self.m), "a") as f:
@@ -341,13 +344,13 @@ def strategy_check(provider: DataProvider, cfg: dict, log=print) -> dict:
     keeps the current strategy. Returns the (possibly updated) config."""
     from .backtest import run_backtest
     from .performance import strategy_hint
-    from .strategies import REGISTRY, all_strategies
+    from .strategies import REGISTRY, all_strategies, strategy_names
 
     m: Market = cfg.get("market", US)
     sh = cfg.get("switch_hint", {})
     try:
         t = run_backtest(provider, cfg, all_strategies(cfg), days=int(sh.get("lookback_days", 10)), log=log)
-        h = strategy_hint(t, cfg, names=list(REGISTRY))
+        h = strategy_hint(t, cfg, names=strategy_names(cfg))
     except Exception as e:
         notify("INFO", "Strategy check failed", f"Keeping {cfg['active_strategy']}: {str(e)[:150]}", cfg)
         return cfg

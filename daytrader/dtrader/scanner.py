@@ -94,9 +94,9 @@ def buy_status(strategy: Strategy, s: Signal, bars: pd.DataFrame, last: float) -
     label = f"triggered {s.time:%H:%M}"
     if not pos.is_open:
         return label, pos.exit_reason
-    if last <= s.stop:
-        return label, "below stop"
-    if (last - s.entry) / s.risk > MAX_CHASE_R:
+    if s.side * (last - s.stop) <= 0:
+        return label, "below stop" if s.side > 0 else "above stop"
+    if s.side * (last - s.entry) / s.risk > MAX_CHASE_R:
         return label, "ran past entry"
     if bars.index[-1].time() > strategy.last_entry:
         return label, "past entry cutoff"
@@ -115,7 +115,8 @@ def analyse(strategy: Strategy, cand: Candidate) -> dict:
         if not sigs or not out["status"].startswith("BUY"):
             w = strategy.watch_level(df, ctx)
             near = float(strategy.universe.get("near_trigger_pct", 5)) / 100
-            if w and cand.last < w[0] and (w[0] - cand.last) / w[0] <= near:
+            side = getattr(strategy, "side", 1)  # a short triggers on the way down
+            if w and side * (w[0] - cand.last) > 0 and abs(w[0] - cand.last) / w[0] <= near:
                 out["status"] = "SETTING UP" if not sigs else out["status"]
                 out["watch"] = w
     if out["status"] == NO_SETUP and out["qualifies"]:
@@ -238,7 +239,8 @@ def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: dat
                 "triggered_at": f"{sig.time:%H:%M}" if sig else None,
                 "trigger_day": sig.time.date().isoformat() if sig else None,
                 "outcome": a.get("outcome"),
-                "r_from_entry": round((c.last - sig.entry) / sig.risk, 2) if sig and sig.risk > 0 else None,
+                "r_from_entry": round(sig.side * (c.last - sig.entry) / sig.risk, 2) if sig and sig.risk > 0 else None,
+                "side": getattr(st, "side", 1),
                 "why": (f"[{a['outcome']}] " if a.get("outcome") else "") + sig.reason if sig
                        else (f"watch {a['watch'][1]}" if a["watch"] else ""),
                 "source": c.source,

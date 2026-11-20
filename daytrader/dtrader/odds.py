@@ -156,19 +156,20 @@ def setup_odds(provider, cfg: dict, strategy: Strategy, sig: Signal, bars_today:
     closes = last * np.exp(np.cumsum(draws[:, :, 0], axis=1))
     prev = np.concatenate([np.full((paths, 1), last), closes[:, :-1]], axis=1)
     highs, lows = prev * np.exp(draws[:, :, 1]), prev * np.exp(draws[:, :, 2])
-    hit_s, hit_t = lows <= sig.stop, highs >= sig.target
+    side = sig.side  # a short's stop is above and its target below
+    hit_s, hit_t = (lows <= sig.stop, highs >= sig.target) if side > 0 else (highs >= sig.stop, lows <= sig.target)
     first_s = np.where(hit_s.any(1), hit_s.argmax(1), len(slots))
     first_t = np.where(hit_t.any(1), hit_t.argmax(1), len(slots))
     stop_first = (first_s < len(slots)) & (first_s <= first_t)  # same bar: assume the stop (conservative)
     tgt_first = (first_t < len(slots)) & (first_t < first_s)
     open_end = ~(stop_first | tgt_first)
-    risk = max(last - sig.stop, 1e-9)
-    r = np.where(tgt_first, (sig.target - last) / risk,
-                 np.where(stop_first, (sig.stop - last) / risk, (closes[:, -1] - last) / risk))
+    risk = max(side * (last - sig.stop), 1e-9)
+    r = side * np.where(tgt_first, (sig.target - last) / risk,
+                        np.where(stop_first, (sig.stop - last) / risk, (closes[:, -1] - last) / risk))
     odds = Odds(float(tgt_first.mean()), float(stop_first.mean()), float(open_end.mean()), float(r.mean()),
                 paths, scale, len(moves), last)
-    if last <= sig.stop:
-        odds.notes.append("price is at or below the stop")
+    if side * (last - sig.stop) <= 0:
+        odds.notes.append("price is at or past the stop")
 
     # --- history: the same rule on this stock's previous sessions
     try:

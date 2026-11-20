@@ -25,6 +25,9 @@ schwab:
 # Strategy used by `scan`, `monitor` and the dashboard unless overridden.
 # Change it with:  python cli.py switch <name>   (or the dashboard dropdown)
 active_strategy: gap_and_go
+# Short setups too (every strategy run upside down: orb_short, ...). Stocks:
+# long only; the futures markets below turn it on.
+allow_short: false
 
 # --- Universe: which stocks are even considered ----------------------
 universe:
@@ -108,7 +111,7 @@ alerts:
   sound: true
   # Phone push via the free ntfy app: set NTFY_TOPIC in .env, then subscribe
   # to that topic in the app. Which alert kinds to push:
-  ntfy_kinds: [BUY, SELL, STOP, WATCH, INFO]   # STOP = stop-loss order problem in Fyers, INFO = stop moves, start/finish
+  ntfy_kinds: [BUY, SELL, SHORT, COVER, STOP, WATCH, INFO]   # SHORT/COVER = futures shorts, STOP = stop-loss order problem in Fyers, INFO = stop moves, start/finish
   ntfy_server: https://ntfy.sh
 
 backtest:
@@ -233,6 +236,7 @@ india:
 # next on expiry day (lot sizes come from Fyers' contract list).
 # ======================================================================
 india_fut:
+  allow_short: true
   universe:
     watchlist: [NIFTY, BANKNIFTY]   # also FINNIFTY, MIDCPNIFTY (each costs Fyers calls)
     near_trigger_pct: 0.3
@@ -276,6 +280,7 @@ india_fut:
 # overnight high/low. Schwab's /MES etc. is always the front month.
 # ======================================================================
 us_fut:
+  allow_short: true
   universe:
     # Micros by default: ES and NQ are the same charts at 10x the size, so
     # listing both would alert every setup twice.

@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 import pandas as pd  # noqa: E402
 
 from dtrader.config import load_config, set_active_strategy  # noqa: E402
-from dtrader.strategies import REGISTRY, all_strategies, get_strategy  # noqa: E402
+from dtrader.strategies import REGISTRY, all_strategies, get_strategy, strategy_names  # noqa: E402
 
 pd.set_option("display.width", 200)
 pd.set_option("display.max_columns", 30)
@@ -101,7 +101,7 @@ def cmd_scan(cfg, args):
         from dtrader.performance import strategy_hint
         from dtrader.scanner import buyable_now
 
-        recent = strategy_hint(load_last_trades(cfg["market"]), cfg, names=list(REGISTRY)).table
+        recent = strategy_hint(load_last_trades(cfg["market"]), cfg, names=strategy_names(cfg)).table
         b = buyable_now(df, cfg["active_strategy"], recent, cfg.get("hide_from_buyable") or ())
         if b.empty:
             print("Nothing is buyable right now.")
@@ -185,7 +185,7 @@ def cmd_hint(cfg, args):
         trades = run_backtest(provider(cfg, args), cfg, all_strategies(cfg),
                               days=cfg.get("switch_hint", {}).get("lookback_days", 10),
                               log=lambda m: print(m, file=sys.stderr))
-    h = strategy_hint(trades, cfg, names=list(REGISTRY))
+    h = strategy_hint(trades, cfg, names=strategy_names(cfg))
     print(h.table.to_string())
     print("\n" + h.message)
     if h.switch and h.recommended and args.apply:
@@ -325,7 +325,7 @@ def cmd_today(cfg, args):
         from dtrader.backtest import load_last_trades
         from dtrader.performance import strategy_hint
 
-        h = strategy_hint(load_last_trades(m), cfg, names=list(REGISTRY))
+        h = strategy_hint(load_last_trades(m), cfg, names=strategy_names(cfg))
         hint = h.message
     except Exception:
         hint = ""
