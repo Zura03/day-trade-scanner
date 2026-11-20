@@ -3,6 +3,10 @@
 Each market keeps its own settings, active strategy, scan history, backtest,
 tracked trades and alerts. US files stay directly in data/ (as before); other
 markets get a subfolder, e.g. data/india/.
+
+A market is stocks or futures (`kind`) in a region (`region`: "us" or
+"india", which decides the broker, the data source and the config section a
+futures market builds on).
 """
 from __future__ import annotations
 
@@ -29,6 +33,21 @@ class Market:
     calendar: str              # exchange_calendars code
     tz_label: str
     flag: str
+    kind: str = "stocks"       # "stocks" | "futures"
+    region: str = ""           # "us" | "india"; defaults to the key
+
+    def __post_init__(self):
+        if not self.region:
+            object.__setattr__(self, "region", self.key)
+
+    @property
+    def futures(self) -> bool:
+        return self.kind == "futures"
+
+    @property
+    def unit(self) -> str:
+        """What a position is counted in."""
+        return "lots" if self.futures else "shares"
 
     @property
     def data_dir(self) -> Path:
@@ -111,7 +130,14 @@ US = Market("us", "US", ZoneInfo("America/New_York"), time(9, 30), time(16, 0), 
             "$", "XNYS", "ET", "🇺🇸")
 INDIA = Market("india", "India", ZoneInfo("Asia/Kolkata"), time(9, 15), time(15, 30), None,
                "₹", "XBOM", "IST", "🇮🇳")
-MARKETS = {m.key: m for m in (US, INDIA)}
+# Index futures. US: the regular session only (strategies are built around the 9:30 open), so
+# the NYSE calendar: CME's own calendar times sessions from the 18:00 Globex open. Bars from
+# 04:00 give the overnight high/low the way premarket does for stocks.
+INDIA_FUT = Market("india_fut", "India futures", ZoneInfo("Asia/Kolkata"), time(9, 15), time(15, 30), None,
+                   "₹", "XBOM", "IST", "🇮🇳", kind="futures", region="india")
+US_FUT = Market("us_fut", "US futures", ZoneInfo("America/New_York"), time(9, 30), time(16, 0), time(4, 0),
+                "$", "XNYS", "ET", "🇺🇸", kind="futures", region="us")
+MARKETS = {m.key: m for m in (US, INDIA, INDIA_FUT, US_FUT)}
 
 
 def get_market(key: str | Market | None) -> Market:
@@ -119,8 +145,8 @@ def get_market(key: str | Market | None) -> Market:
         return key
     # a dashboard page open across a code reload still holds a Market of the old class
     key = (getattr(key, "key", key) or "us").lower()
-    if key in ("in", "nse", "indian"):
-        key = "india"
+    key = {"in": "india", "nse": "india", "indian": "india", "india-fut": "india_fut", "us-fut": "us_fut",
+           "nifty": "india_fut", "futures": "us_fut"}.get(key, key)
     if key not in MARKETS:
         raise KeyError(f"Unknown market '{key}'. Options: {', '.join(MARKETS)}")
     return MARKETS[key]

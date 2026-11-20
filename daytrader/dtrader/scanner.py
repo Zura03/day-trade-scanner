@@ -114,7 +114,8 @@ def analyse(strategy: Strategy, cand: Candidate) -> dict:
             out["status"], out["outcome"] = buy_status(strategy, s, df, cand.last)
         if not sigs or not out["status"].startswith("BUY"):
             w = strategy.watch_level(df, ctx)
-            if w and cand.last < w[0] and (w[0] - cand.last) / w[0] <= 0.05:
+            near = float(strategy.universe.get("near_trigger_pct", 5)) / 100
+            if w and cand.last < w[0] and (w[0] - cand.last) / w[0] <= near:
                 out["status"] = "SETTING UP" if not sigs else out["status"]
                 out["watch"] = w
     if out["status"] == NO_SETUP and out["qualifies"]:
@@ -132,14 +133,17 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
     is_today = day == m.now().date()
 
     sources: dict[str, str] = {}
-    if is_today:
+    if m.futures:  # a fixed list of futures, every session
+        for s in provider.all_symbols():
+            sources.setdefault(s, "watchlist")
+    if is_today and not m.futures:
         for s in provider.movers(limit=80):
             sources.setdefault(s, "movers")
     for s in u.get("watchlist") or []:
         sources.setdefault(s.upper(), "watchlist")
-    for s in history_symbols(before=day, days=3, market=m):
+    for s in history_symbols(before=day, days=3, market=m) if not m.futures else []:
         sources.setdefault(s, "history")
-    if not is_today and not any(v == "movers" for v in sources.values()):
+    if not is_today and not m.futures and not any(v == "movers" for v in sources.values()):
         for s in history_symbols(days=1, market=m) or provider.movers(limit=80):
             sources.setdefault(s, "movers")
     log(f"Universe: {len(sources)} symbols for session {day}")
@@ -152,8 +156,8 @@ def gather_candidates(provider: DataProvider, cfg: dict, day: date | None = None
             continue
         chg = (r["last"] / r["prev_close"] - 1) * 100
         rv = r["volume"] / r["avg_volume"] if r["avg_volume"] else 0
-        if not (u.get("min_price", 1) <= r["last"] <= u.get("max_price", 20)):
-            continue
+        if not m.futures and not (u.get("min_price", 1) <= r["last"] <= u.get("max_price", 20)):
+            continue  # (a future's price isn't what you pay: its margin is)
         # Before the open the day's volume is ~0, so relative volume can't filter yet.
         premarket = m.now().time() < m.open
         weak_vol = rv < u.get("min_rel_volume", 2) and not premarket
@@ -230,6 +234,7 @@ def scan(provider: DataProvider, cfg: dict, strategies: list[Strategy], day: dat
                 "stop": sig.stop if sig else None,
                 "target": sig.target if sig else None,
                 "shares": st.position_size(sig) if sig else None,
+                "size": st.size_text(sig) if sig else None,
                 "triggered_at": f"{sig.time:%H:%M}" if sig else None,
                 "trigger_day": sig.time.date().isoformat() if sig else None,
                 "outcome": a.get("outcome"),

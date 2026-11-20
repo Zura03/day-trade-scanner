@@ -24,6 +24,7 @@ import httpx
 from .config import load_config, load_state, save_state, set_active_strategy
 from .data.base import DataProvider
 from .indicators import add_indicators
+from .futures import qty_text
 from .markets import US, Market, get_market
 from .performance import journal_path
 from .scanner import analyse, gather_candidates, refresh_bars, session_day
@@ -241,7 +242,7 @@ class Monitor:
             return
         s.entry = round(fill, 4)
         sh = self.strategy.position_size(s)
-        if sh <= 0:
+        if sh <= 0 and not self.m.futures:  # a future too big for your capital still alerts, saying why
             return
         started = _time.time()
         odds = ""
@@ -275,8 +276,9 @@ class Monitor:
                   file=sys.stderr, flush=True)
             return
         px = f" | last {now_px:.2f}" if now_px is not None else ""
+        size = self.strategy.size_text(s) if self.m.futures else f"{sh} sh"
         notify("BUY", f"{s.symbol} @ {s.entry:.2f}",
-               f"stop {s.stop:.2f} / max target {s.target:.2f} / {sh} sh "
+               f"stop {s.stop:.2f} / max target {s.target:.2f} / {size} "
                f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{px}{odds}", self.cfg)
         self.state["positions"].append(Position.from_signal(s, sh).to_dict())
         taken[tkey] = taken.get(tkey, 0) + 1
@@ -322,7 +324,7 @@ class Monitor:
             pnl = (replay.exit_price - replay.entry) * replay.shares
             if not self._seen(f"sell|{p.symbol}|{p.entry_time}"):
                 notify("SELL", f"{p.symbol} @ {replay.exit_price:.2f} ({replay.exit_reason})",
-                       f"{replay.r_multiple:+.2f}R, {self.m.fmt_money(pnl)} on {replay.shares} sh "
+                       f"{replay.r_multiple:+.2f}R, {self.m.fmt_money(pnl)} on {qty_text(self.m, p.symbol, replay.shares)} "
                        f"(entry {replay.entry:.2f})", self.cfg)
             with open(journal_path(self.m), "a") as f:
                 f.write(json.dumps(replay.to_dict()) + "\n")

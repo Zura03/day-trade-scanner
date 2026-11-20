@@ -164,6 +164,8 @@ def earnings_date(symbol: str, m: Market) -> date | None:
 
 def check(symbol: str, m: Market) -> NewsInfo:
     """Headlines (fresh = since the previous session's close) + earnings timing."""
+    if m.futures:  # an index future has no company news or earnings
+        return NewsInfo()
     info = NewsInfo(headlines=headlines(symbol, m))
     prev = [d for d in m.sessions_back(3) if d < m.now().date()]
     since = (datetime.combine(prev[-1], m.close, m.tz) if prev else m.now() - timedelta(hours=18))

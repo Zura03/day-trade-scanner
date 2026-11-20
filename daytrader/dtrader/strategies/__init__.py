@@ -32,7 +32,8 @@ def get_strategy(name: str, cfg: dict) -> Strategy:
     return REGISTRY[name](
         params=(cfg.get("strategies") or {}).get(name),
         exits=cfg.get("exits"),
-        risk={**(cfg.get("risk") or {}), "broker": cfg.get("broker")},  # broker: fee check
+        risk={**(cfg.get("risk") or {}), "broker": cfg.get("broker"),  # broker: fee check
+              "futures": cfg.get("futures")},                           # margin estimates
         universe=cfg.get("universe"),
         market=cfg.get("market") or US,
     )

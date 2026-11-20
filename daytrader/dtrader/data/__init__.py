@@ -9,10 +9,13 @@ def get_provider(cfg: dict | None = None, source: str | None = None, login: bool
            schwab without a valid login = Alpaca, else Yahoo, until `login=True`
            (`./run.sh auth`) has opened the browser.
     India: auto = your broker (Fyers, else Groww, else Zerodha Kite) once
-           today's login is done, else free Yahoo (NSE)."""
+           today's login is done, else free Yahoo (NSE).
+    Futures: Fyers (India) or Schwab (US) only - no free source has them."""
     cfg = cfg or load_config()
     market = cfg["market"]
     source = source or cfg.get("data_source", "auto")
+    if market.futures:
+        return _futures_provider(cfg, login)
     if market.key == "india":
         return _india_provider(source)
     akeys, skeys = alpaca_keys(), schwab_keys()
@@ -160,3 +163,30 @@ def india_token_state() -> str:
 
         return f"kite:{token_valid_today() or ''}"
     return "none"
+
+
+def _futures_provider(cfg: dict, login: bool = False) -> DataProvider:
+    market = cfg["market"]
+    roots = list((cfg.get("universe") or {}).get("watchlist") or []) or None
+    if market.region == "india":
+        from .fyers_provider import DAILY_BUDGET, FyersFuturesProvider, calls_today, fyers_keys, token_valid_today
+
+        tok, keys = token_valid_today(), fyers_keys()
+        if not keys:
+            raise RuntimeError("India futures need Fyers: FYERS_APP_ID / FYERS_SECRET_KEY in .env")
+        if not tok:
+            raise RuntimeError(india_login_hint("fyers") or "Log in to Fyers for today: ./run.sh --market india auth")
+        if calls_today() >= DAILY_BUDGET:
+            raise RuntimeError("Fyers' daily call budget is used up: no futures data until tomorrow")
+        return FyersFuturesProvider(keys[0], tok, roots=roots)
+    skeys = schwab_keys()
+    if not skeys:
+        raise RuntimeError("US futures need Schwab: SCHWAB_APP_KEY / SCHWAB_APP_SECRET in .env")
+    from .schwab_provider import SchwabFuturesProvider, login_seconds_left
+
+    s = cfg.get("schwab", {})
+    token = s.get("token_path", "data/schwab_token.json")
+    if not login and login_seconds_left(token) <= 0:
+        raise RuntimeError("Log in to Schwab first: ./run.sh auth")
+    return SchwabFuturesProvider(skeys[0], skeys[1], s.get("callback_url", "https://127.0.0.1:8182"), token,
+                                 None, login, roots=roots)

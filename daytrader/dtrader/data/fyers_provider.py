@@ -38,7 +38,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import httpx
 import pandas as pd
 
-from ..markets import INDIA, india_fo_symbols
+from ..markets import INDIA, INDIA_FUT, india_fo_symbols
 from .base import BAR_COLS, CACHE_DIR, DataProvider, empty_bars, rank_movers, read_cache
 
 API = "https://api-t1.fyers.in/api/v3"
@@ -224,6 +224,7 @@ def fyers_symbol(s: str) -> str:
 class FyersProvider(DataProvider):
     name = "fyers"
     market = INDIA
+    shared_sub = "shared"  # folder (next to SHARED_DIR) for bars and quotes shared between processes
 
     def __init__(self, app_id: str, access_token: str, client: httpx.Client | None = None):
         self.http = client or httpx.Client(timeout=20)
@@ -233,6 +234,17 @@ class FyersProvider(DataProvider):
         self._asked: dict[str, float] = {}                         # symbol -> last asked for
 
     # ---- helpers ----------------------------------------------------------
+    def _fy(self, symbol: str) -> str:
+        """The app's symbol -> Fyers' (RELIANCE -> NSE:RELIANCE-EQ)."""
+        return fyers_symbol(symbol)
+
+    def _unfy(self, fy: str) -> str:
+        """Fyers' symbol -> the app's."""
+        return fy.split(":", 1)[1].removesuffix("-EQ")
+
+    def _shared(self):
+        return SHARED_DIR.parent / self.shared_sub
+
     def _get(self, path: str, params: dict, reserve: int = 0, source: str = "other") -> dict:
         for attempt in range(3):
             take_call(reserve, source)
@@ -255,7 +267,7 @@ class FyersProvider(DataProvider):
 
     def _history(self, symbol: str, start: datetime, end: datetime, resolution: str, reserve: int = 0,
                  source: str = "history") -> list:
-        d = self._get("/history", {"symbol": fyers_symbol(symbol), "resolution": resolution, "date_format": "0",
+        d = self._get("/history", {"symbol": self._fy(symbol), "resolution": resolution, "date_format": "0",
                                    "range_from": str(int(start.timestamp())), "range_to": str(int(end.timestamp())),
                                    "cont_flag": "1"}, reserve, source)
         return d.get("candles") or []
@@ -319,12 +331,13 @@ class FyersProvider(DataProvider):
     def _shared_quotes(self, symbols: list[str]) -> dict[str, list]:
         """{symbol: [fetched at, last, prev_close, volume]}, reusing quotes any
         process fetched in the last QUOTE_TTL seconds and fetching the rest."""
-        SHARED_DIR.mkdir(parents=True, exist_ok=True)
-        path = SHARED_DIR / f"quotes_{INDIA.now().date()}.json"
-        with open(SHARED_DIR / "quotes.lock", "w") as lk:
+        shared = self._shared()
+        shared.mkdir(parents=True, exist_ok=True)
+        path = shared / f"quotes_{INDIA.now().date()}.json"
+        with open(shared / "quotes.lock", "w") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)  # one process fetches; the other waits and reuses
             if not path.exists():  # first fetch of the day: clear earlier days' shared files
-                for old in SHARED_DIR.iterdir():
+                for old in shared.iterdir():
                     if old.suffix in (".json", ".pkl") and str(INDIA.now().date()) not in old.name:
                         old.unlink(missing_ok=True)
             try:
@@ -336,11 +349,11 @@ class FyersProvider(DataProvider):
             stale = [s for s in symbols if s not in snap or snap[s][0] < now - ttl]
             try:
                 for i in range(0, len(stale), 50):
-                    d = self._get("/quotes", {"symbols": ",".join(fyers_symbol(s) for s in stale[i:i + 50])}, source="quotes")
+                    d = self._get("/quotes", {"symbols": ",".join(self._fy(s) for s in stale[i:i + 50])}, source="quotes")
                     for q in d.get("d") or []:
                         v = q.get("v") or {}
                         if q.get("s") == "ok" and v.get("lp"):
-                            snap[q["n"].split(":", 1)[1].removesuffix("-EQ")] = [
+                            snap[self._unfy(q["n"])] = [
                                 now, float(v["lp"]), float(v.get("prev_close_price") or 0),
                                 float(v.get("volume") or 0)]
             except BudgetExhausted:
@@ -377,9 +390,10 @@ class FyersProvider(DataProvider):
         hit = self._today.get(symbol)
         if hit and hit[0] > since:
             return hit[1]
-        SHARED_DIR.mkdir(parents=True, exist_ok=True)
-        path = SHARED_DIR / f"{symbol}_{day}.pkl"  # today's bars fetched by any process
-        with open(SHARED_DIR / f"{symbol}.lock", "w") as lk:
+        shared = self._shared()
+        shared.mkdir(parents=True, exist_ok=True)
+        path = shared / f"{symbol}_{day}.pkl"  # today's bars fetched by any process
+        with open(shared / f"{symbol}.lock", "w") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)  # if the other process is fetching this stock, wait and reuse it
             if path.exists() and path.stat().st_mtime > since:
                 if (shared := read_cache(path)) is not None:
@@ -424,3 +438,46 @@ class FyersProvider(DataProvider):
                 return self._yahoo_provider().daily(symbol, n)
 
         return self._cached_daily(symbol, days, fetch)
+
+
+class _NoFallback:
+    """Yahoo has no NSE futures: once Fyers' daily budget is used, there is no data until tomorrow."""
+    def __getattr__(self, name):
+        def fail(*a, **k):
+            raise BudgetExhausted("Fyers daily call budget used: no futures data until tomorrow")
+        return fail
+
+
+class FyersFuturesProvider(FyersProvider):
+    """NSE index futures (NIFTY, BANKNIFTY, ...) through the same Fyers login,
+    call budget and rate limit as the stock feed. Symbols are roots; each maps
+    to today's contract (dtrader.futures), and history is Fyers' continuous
+    series, so past days span earlier contracts."""
+    name = "fyers_fut"
+    market = INDIA_FUT
+    shared_sub = "shared_fut"
+    ROOTS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
+
+    def __init__(self, *a, roots: list[str] | None = None, **k):
+        super().__init__(*a, **k)
+        self.roots = roots or self.ROOTS
+        self._sym: dict[str, str] = {}
+
+    def _fy(self, symbol: str) -> str:
+        from ..futures import contract
+
+        fy = contract(self.market, symbol).symbol
+        self._sym[fy.split(":", 1)[1]] = symbol
+        return fy
+
+    def _unfy(self, fy: str) -> str:
+        return self._sym.get(fy.split(":", 1)[1], fy)
+
+    def _yahoo_provider(self):
+        return _NoFallback()
+
+    def all_symbols(self) -> list[str]:
+        return list(self.roots)
+
+    def daily_many(self, symbols: list[str], days: int = 60) -> dict[str, pd.DataFrame]:
+        return DataProvider.daily_many(self, symbols, days)  # a handful of roots: Fyers for all

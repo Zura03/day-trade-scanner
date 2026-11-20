@@ -1,7 +1,8 @@
 """Config + small persistent state (active strategy, open tracked trades).
 
 config.yaml's top level is the US setup; a market section (e.g. `india:`)
-overrides any of it for that market. State lives per market
+overrides any of it for that market. A futures market builds on its region:
+India futures = top level, then `india:`, then `india_fut:`. State lives per market
 (data/state.json for the US, data/india/state.json for India).
 """
 from __future__ import annotations
@@ -42,8 +43,9 @@ def load_config(market: str | Market | None = None) -> dict[str, Any]:
     m = get_market(market)
     with open(ROOT / "config.yaml") as f:
         raw = yaml.safe_load(f) or {}
-    base = {k: v for k, v in raw.items() if k not in MARKETS}
-    cfg = _merge(base, raw.get(m.key) or {}) if m.key != "us" else base
+    cfg = {k: v for k, v in raw.items() if k not in MARKETS}
+    for key in _sections(m):
+        cfg = _merge(cfg, raw.get(key) or {})
     cfg = _merge(cfg, load_settings(m))   # dashboard Settings tab overrides config.yaml
     cfg = apply_capital(cfg)
     cfg["market"] = m
@@ -55,6 +57,11 @@ def load_config(market: str | Market | None = None) -> dict[str, Any]:
     if cfg.get("active_strategy") not in REGISTRY:
         cfg["active_strategy"] = next(iter(REGISTRY))
     return cfg
+
+
+def _sections(m: Market) -> list[str]:
+    """config.yaml sections over the top level (the US stock setup), in order."""
+    return [k for k in dict.fromkeys((m.region, m.key)) if k != "us"]
 
 
 # ---- settings edited in the dashboard (per market) ----------------------------
@@ -120,7 +127,9 @@ def price_ceiling(market: str | Market | None = None) -> float | None:
     m = get_market(market)
     with open(ROOT / "config.yaml") as f:
         raw = yaml.safe_load(f) or {}
-    u = {**(raw.get("universe") or {}), **(((raw.get(m.key) or {}) if m.key != "us" else {}).get("universe") or {})}
+    u = dict(raw.get("universe") or {})
+    for key in _sections(m):
+        u.update((raw.get(key) or {}).get("universe") or {})
     return float(u["max_price"]) if u.get("max_price") else None
 
 

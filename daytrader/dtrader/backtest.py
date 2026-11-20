@@ -44,13 +44,20 @@ def trade_costs(cfg: dict, market: Market) -> dict:
     spread is 0.7%, far more than a flat 0.1%), the broker's fees and the
     minimum share count. Shared by the backtest and the odds track record."""
     from .costs import round_trip
+    from .futures import lot_units
 
     bt = cfg.get("backtest") or {}
     broker = cfg.get("broker")
+
+    def fees(value: float, units: int = 0, symbol: str | None = None):
+        lot = lot_units(market, symbol) if market.futures and symbol else 0
+        return round_trip(market.key, broker, value, contracts=units // lot if lot else 0, symbol=symbol)
+
     return {"slippage": float(bt.get("slippage_pct", 0.1)) / 100,
             "tick": float(bt.get("min_slippage", 0.01)),
-            "fees": lambda v: round_trip(market.key, broker, v),
-            "min_shares": int((cfg.get("derived") or {}).get("min_shares", 1))}
+            "fees": fees,
+            # futures are sized in whole lots already: one lot is the minimum
+            "min_shares": 1 if market.futures else int((cfg.get("derived") or {}).get("min_shares", 1))}
 
 
 def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.001,
@@ -74,6 +81,8 @@ def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.
             continue
         i = pos_of[s.time]
         shares = strategy.position_size(s)
+        if shares <= 0 and strategy.market.futures:
+            shares = strategy.lot(s.symbol)  # judge the setup at one lot even when your capital can't cover it
         if fees is not None and shares < min_shares:
             continue  # unaffordable at this account size: you couldn't have taken it
         p = Position.from_signal(s, shares)
@@ -87,7 +96,7 @@ def simulate_day(strategy: Strategy, df: pd.DataFrame, ctx, slippage: float = 0.
             p._close(df.index[reg_last], df["close"].iat[reg_last], "close")
         p.exit_price -= max(p.exit_price * slippage, tick)
         if fees is not None and shares > 0:
-            c = fees(shares * p.entry)
+            c = fees(shares * p.entry, shares, s.symbol)
             p.entry += c.buy_side / shares
             p.exit_price -= c.sell_side / shares
         trades.append(p)
@@ -136,7 +145,9 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
     sessions = completed_sessions(provider.market, days)
 
     universe = None
-    if symbols is None and bt.get("universe", "market") == "market":
+    if provider.market.futures:  # a fixed list, traded every session: no gapper search
+        symbols = symbols or provider.all_symbols()
+    elif symbols is None and bt.get("universe", "market") == "market":
         universe = provider.all_symbols()
     if universe:
         min_avg_vol = float(bt.get("min_avg_volume", 100_000))
@@ -156,11 +167,14 @@ def run_backtest(provider: DataProvider, cfg: dict, strategies: list[Strategy],
     # day -> [(symbol, rank)], keep the strongest movers per day
     by_day: dict[date, list[tuple[str, float]]] = {}
     for sym, d in dailies.items():
-        for dd, score in _mover_days(d, sessions, u, min_avg_vol):
+        days_in_play = [(dd, 0.0) for dd in sessions] if provider.market.futures \
+            else _mover_days(d, sessions, u, min_avg_vol)
+        for dd, score in days_in_play:
             by_day.setdefault(dd, []).append((sym, score))
     plan = {dd: [s for s, _ in sorted(v, key=lambda x: -x[1])[:max_per_day]] for dd, v in by_day.items()}
     total = sum(len(v) for v in plan.values())
-    log(f"Backtesting {len(strategies)} strategies on {total} gapper-days over {len(sessions)} sessions")
+    what = "symbol-days" if provider.market.futures else "gapper-days"
+    log(f"Backtesting {len(strategies)} strategies on {total} {what} over {len(sessions)} sessions")
 
     rows = []
     for n, dd in enumerate(sorted(plan), 1):

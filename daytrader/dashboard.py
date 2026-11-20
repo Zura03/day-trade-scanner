@@ -13,6 +13,7 @@ import streamlit as st  # noqa: E402
 from dtrader.alerts import load_alerts  # noqa: E402
 from dtrader.backtest import load_last_trades, run_backtest, summarize  # noqa: E402
 from dtrader.config import load_config, load_state, set_active_strategy  # noqa: E402
+from dtrader.futures import lot_units  # noqa: E402
 from dtrader.markets import MARKETS  # noqa: E402
 from dtrader.data import get_provider  # noqa: E402
 from dtrader.performance import load_journal, strategy_hint  # noqa: E402
@@ -109,7 +110,8 @@ def provider_for(market_key: str, source: str, broker_token: str | None):
     return p
 
 
-SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "fyers", "groww", "kite", "yfinance"]}
+SOURCES = {"us": ["auto", "alpaca", "schwab", "yfinance"], "india": ["auto", "fyers", "groww", "kite", "yfinance"],
+           "india_fut": ["auto"], "us_fut": ["auto"]}  # futures: Fyers / Schwab only
 
 # ---------------- sidebar ------------------------------------------------
 with st.sidebar:
@@ -127,7 +129,7 @@ with st.sidebar:
     source = st.selectbox("Data source", opts, key=f"source_{mkey}",
                           index=opts.index(cfg.get("data_source", "auto")) if cfg.get("data_source", "auto") in opts else 0)
     broker_tok = None
-    if mkey == "india":
+    if mk.region == "india":  # a new Fyers login rebuilds the provider (futures too)
         from dtrader.data import india_login_hint, india_login_needed, india_token_state
 
         broker_tok = india_token_state()
@@ -361,7 +363,8 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
         "Triggered": b["triggered_at"],
         "Entry": b["entry"], "Last": b["last"], "Past entry": b["r_from_entry"],
         "Stop": b["stop"], "Max target": b["target"],
-        "Target hit lately": [target_hit(n) for n in b["strategy"]], "Shares": b["shares"],
+        "Target hit lately": [target_hit(n) for n in b["strategy"]],
+        "Shares": b["size"] if mk.futures else b["shares"],
         "Setup": b["why"],
         "Why this score": [x.reason for x in scores],
     })
@@ -389,7 +392,8 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
                                 "Past entry": st.column_config.NumberColumn(format="%+.2fR"),
                                 "Expected R": st.column_config.NumberColumn(format="%+.2fR"),
                                 "Why this score": st.column_config.TextColumn(width="large"),
-                                "Shares": st.column_config.NumberColumn(format="%d"),
+                                "Shares": st.column_config.Column(mk.unit.title()) if mk.futures
+                                else st.column_config.NumberColumn(format="%d"),
                                 "Setup": st.column_config.TextColumn(width="large"),
                                 "News": st.column_config.TextColumn(width="large")})
     rr = cfg.get("risk", {}).get("reward_risk", 2)
@@ -466,7 +470,8 @@ def picks():
                            f"{view['symbol'].nunique()} candidates"), unsafe_allow_html=True)
     st.markdown(ui.tiles([
         ("Buy now", str(int((view["status"] == "BUY NOW").sum())), strategy.title if not compare else "all strategies"),
-        ("Setting up", str(int((view["status"] == "SETTING UP").sum())), "within 5% of trigger"),
+        ("Setting up", str(int((view["status"] == "SETTING UP").sum())),
+         f"within {cfg['universe'].get('near_trigger_pct', 5):g}% of trigger"),
         ("Triggered today", str(int(view["status"].str.startswith("triggered").sum())), "no longer buyable"),
         ("Candidates", str(view["symbol"].nunique()), "passed the filters"),
     ]), unsafe_allow_html=True)
@@ -474,19 +479,22 @@ def picks():
                                  "day_%": "Day", "rel_vol": "Rel vol", "float_M": "Float (M)", "entry": "Entry",
                                  "stop": "Stop", "target": "Max target", "shares": "Shares", "why": "Setup"})
     table["Strategy"] = [REGISTRY[n].title for n in view["strategy"]]
+    if mk.futures:  # lots / contracts, or why it can't be sized
+        table["Shares"] = view["size"].fillna("")
     cols = ["Symbol", "Strategy", "Status", "Last", "Gap", "Day", "Rel vol"] + \
         (["Float (M)"] if mk.key == "us" else []) + ["Entry", "Stop", "Max target", "Shares", "Setup"]
     if not compare:
         cols.remove("Strategy")
     money = st.column_config.NumberColumn(format="%.2f")
     pct = st.column_config.NumberColumn(format="%+.1f%%")
-    styled = ui.dash_fill(table[cols], money=["Entry", "Stop", "Max target"], whole=["Shares"]).style \
+    styled = ui.dash_fill(table[cols], money=["Entry", "Stop", "Max target"], whole=[] if mk.futures else ["Shares"]).style \
         .map(ui.status_cell, subset=["Status"]).map(ui.signed_cell, subset=["Day"])
     st.dataframe(styled,
                  width="stretch", hide_index=True, height=min(560, 38 + 35 * len(view)),
                  column_config={"Last": money, "Gap": pct, "Day": pct,
                                 "Rel vol": st.column_config.NumberColumn(format="%.1fx"),
                                 "Float (M)": st.column_config.NumberColumn(format="%.1f"),
+                                "Shares": st.column_config.Column(mk.unit.title()),
                                 "Setup": st.column_config.TextColumn(width="large")})
 
     st.markdown(ui.section("Chart"), unsafe_allow_html=True)
@@ -652,8 +660,11 @@ with tab_mine:
             live = scan_df[scan_df["symbol"] == r["symbol"]]["last"] if len(scan_df) else []
             px = float(live.iloc[0]) if len(live) else float(r["last"])
             sh = r.get("shares")
+            sh = int(sh) if sh == sh and sh else 0
+            if mk.futures:  # the form takes lots / contracts
+                sh = sh // max(lot_units(mk, r["symbol"]), 1)
             pref = {"sym": r["symbol"], "px": px, "stop": float(r["stop"]), "tgt": float(r["target"]),
-                    "sh": int(sh) if sh == sh and sh else 1, "strat": r["strategy"]}
+                    "sh": max(sh, 1), "strat": r["strategy"]}
         else:
             st.session_state.pop(snap_key, None)
         st.session_state[f"buy_pref_{mk.key}"] = pref
@@ -661,7 +672,8 @@ with tab_mine:
     fk = f"{mk.key}_{st.session_state.get(f'buy_form_n_{mk.key}', 0)}"
     c1, c2, c3 = st.columns(3)
     sym = c1.text_input("Symbol", value=pref.get("sym", ""), key=f"b_sym_{fk}").upper().strip()
-    shares = c2.number_input("Shares", min_value=1, step=1, value=pref.get("sh", 1), key=f"b_sh_{fk}")
+    qty_word = {"india": "Lots", "us": "Contracts"}[mk.region] if mk.futures else "Shares"
+    shares = c2.number_input(qty_word, min_value=1, step=1, value=pref.get("sh", 1), key=f"b_sh_{fk}")
     price = c3.number_input(f"Buy price ({cur})", min_value=0.0, step=0.05, format="%.2f",
                             value=pref.get("px", 0.0), key=f"b_px_{fk}")
     c4, c5, c6 = st.columns(3)
@@ -680,7 +692,10 @@ with tab_mine:
                    f"and a 2R target {price * 1.04:.2f}.")
     if st.button("Record buy", type="primary", key=f"b_go_{mk.key}"):
         try:
-            row = add_buy(mk, sym, int(shares), price, stop, target, strat,
+            units = int(shares) * (lot_units(mk, sym) if mk.futures else 1)  # stored in units: P&L per point
+            if units <= 0:
+                raise ValueError(f"No futures contract found for {sym}")
+            row = add_buy(mk, sym, units, price, stop, target, strat,
                           when=_dt.combine(mk.now().date(), when, mk.tz))
             st.session_state.pop(snap_key, None)
             st.toast(f"Tracking {row['shares']} {row['symbol']} @ {row['entry']:.2f}")

@@ -34,6 +34,7 @@ universe:
   min_rel_volume: 2.0         # today's volume vs 10-day avg at same pace
   max_float_millions: 50      # skip filter when float is unknown
   max_candidates: 25          # how many movers to analyse each scan
+  near_trigger_pct: 5         # "setting up" (and a WATCH alert) within this % of the trigger
   # Always included in addition to the live movers list:
   watchlist: []
 
@@ -224,3 +225,89 @@ india:
     universe: market          # every F&O stock that gapped each day
     min_avg_volume: 200000
     max_symbols_per_day: 40
+
+# ======================================================================
+# India index futures (NSE, through Fyers): `--market india_fut`. Builds on
+# the India section above, then this. Prices in index points, money in rupees.
+# A position is whole lots; the contract is the front month, rolling to the
+# next on expiry day (lot sizes come from Fyers' contract list).
+# ======================================================================
+india_fut:
+  universe:
+    watchlist: [NIFTY, BANKNIFTY]   # also FINNIFTY, MIDCPNIFTY (each costs Fyers calls)
+    near_trigger_pct: 0.3
+  # Placeholder: set your own in the dashboard's Settings tab. One NIFTY lot
+  # needs roughly Rs 2 lakh of margin, so sizing shows "needs margin" below that.
+  capital:
+    daily: 250000
+    risk_per_trade_pct: 1.0
+    max_position_pct: 100
+    max_daily_loss_pct: 3.0
+  broker: fyers
+  futures:
+    margin_pct: 0.15          # margin for one lot, as a share of its value - an estimate, check Fyers
+  risk:
+    max_fee_r: 0.15
+  backtest:
+    slippage_pct: 0.005       # index futures: about a point on NIFTY
+    min_slippage: 0.2
+  switch_hint:
+    auto_switch: false        # no futures track record yet
+  hide_from_buyable: []
+  # Index futures move far less than single stocks: thresholds about a fifth.
+  strategies:
+    gap_and_go: {min_gap_pct: 0.4, min_premarket_volume: 0, open_range_minutes: 5}
+    bull_flag: {min_day_gain_pct: 0.6, max_pullback_bars: 5, max_retrace_pct: 50, min_pole_pct: 0.3}
+    orb: {range_minutes: 15, min_gap_pct: 0}
+    orb_retest: {range_minutes: 15, min_gap_pct: 0}
+    vwap_reclaim: {min_gap_pct: 0.3}
+    vwap_bounce: {min_gap_pct: 0.3}
+    red_to_green: {min_dip_pct: 0.3}
+    oversold_bounce: {min_flush_pct: 0.8, rsi_max: 25, min_gap_pct: 0.3}
+    first_hour_trend: {min_trend_pct: 0.5}
+    opening_reversal: {min_drop_pct: 0.5}
+    rip_and_dip: {min_gap_pct: 0.5}
+    gap_down_bounce: {min_gap_down_pct: 1.0, min_flush_pct: 0.5}
+    stop_hunt: {min_sweep_pct: 0.05}
+
+# ======================================================================
+# US index futures (CME, through Schwab): `--market us_fut`. Builds on the
+# US settings at the top. 9:30-16:00 ET only; bars from 04:00 set the
+# overnight high/low. Schwab's /MES etc. is always the front month.
+# ======================================================================
+us_fut:
+  universe:
+    # Micros by default: ES and NQ are the same charts at 10x the size, so
+    # listing both would alert every setup twice.
+    watchlist: [MES, MNQ]
+    near_trigger_pct: 0.3
+  # Placeholder: set your own in Settings.
+  capital:
+    daily: 5000
+    risk_per_trade_pct: 1.0
+    max_position_pct: 100
+    max_daily_loss_pct: 3.0
+  broker: schwab
+  futures:
+    # margin per contract in $ - estimates, check Schwab's futures margin requirements
+    margin_per_contract: {MES: 2500, MNQ: 3500, ES: 25000, NQ: 35000, RTY: 10000, YM: 12000}
+  backtest:
+    slippage_pct: 0.005       # about a tick on ES
+    min_slippage: 0.25
+  switch_hint:
+    auto_switch: false
+  hide_from_buyable: []
+  strategies:
+    gap_and_go: {min_gap_pct: 0.4, min_premarket_volume: 0, open_range_minutes: 5}
+    bull_flag: {min_day_gain_pct: 0.6, max_pullback_bars: 5, max_retrace_pct: 50, min_pole_pct: 0.3}
+    orb: {range_minutes: 15, min_gap_pct: 0}
+    orb_retest: {range_minutes: 15, min_gap_pct: 0}
+    vwap_reclaim: {min_gap_pct: 0.3}
+    vwap_bounce: {min_gap_pct: 0.3}
+    red_to_green: {min_dip_pct: 0.3}
+    oversold_bounce: {min_flush_pct: 0.8, rsi_max: 25, min_gap_pct: 0.3}
+    first_hour_trend: {min_trend_pct: 0.5}
+    opening_reversal: {min_drop_pct: 0.5}
+    rip_and_dip: {min_gap_pct: 0.5}
+    gap_down_bounce: {min_gap_down_pct: 1.0, min_flush_pct: 0.5}
+    stop_hunt: {min_sweep_pct: 0.05}

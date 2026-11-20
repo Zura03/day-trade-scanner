@@ -204,3 +204,59 @@ class SchwabProvider(DataProvider):
             return df[BAR_COLS].astype(float)
 
         return self._cached_daily(symbol, days, fetch)
+
+
+class SchwabFuturesProvider(SchwabProvider):
+    """US index futures (ES, NQ, MES, MNQ, ...) through the same Schwab login and
+    rate limit. Symbols are roots; Schwab's /ES picks the front contract. Minute
+    history reaches back only about 30-45 days, and there is no Alpaca or Yahoo
+    fallback for futures."""
+    name = "schwab_fut"
+    ROOTS = ["MES", "MNQ", "ES", "NQ"]
+
+    def __init__(self, *a, roots: list[str] | None = None, **k):
+        super().__init__(*a, **k)
+        from ..markets import US_FUT
+
+        self.market = US_FUT
+        self.history = None
+        self.roots = roots or self.ROOTS
+
+    def movers(self, limit: int = 50) -> list[str]:
+        return list(self.roots)
+
+    def all_symbols(self) -> list[str]:
+        return list(self.roots)
+
+    def quotes(self, symbols: list[str]) -> pd.DataFrame:
+        q = super().quotes([f"/{s}" for s in symbols])
+        q.index = [s[1:-3] if s[-3:-2].isalpha() else s.lstrip("/") for s in q.index]  # /ESZ26 -> ES
+        return q
+
+    def intraday(self, symbol: str, day: date) -> pd.DataFrame:
+        return super().intraday(symbol, day)
+
+    def _fetch_intraday(self, symbol: str, start: date, end: date) -> pd.DataFrame:
+        return super()._fetch_intraday(f"/{symbol}", start, end)
+
+    def daily(self, symbol: str, days: int = 60) -> pd.DataFrame:
+        """Daily bars of the full CME session (closing 17:00 ET), not just 9:30-16:00.
+        Cached under the root: '/ES' in a file name would be a path from the disk's root."""
+        def fetch(n: int) -> pd.DataFrame:
+            r = self._call(self.client.get_price_history_every_day, f"/{symbol}",
+                           start_datetime=datetime.now(NY) - timedelta(days=int(n * 1.6) + 5))
+            r.raise_for_status()
+            c = r.json().get("candles", [])
+            if not c:
+                return pd.DataFrame(columns=BAR_COLS)
+            df = pd.DataFrame(c)
+            df.index = pd.to_datetime(df["datetime"], unit="ms", utc=True).dt.tz_convert(NY).dt.normalize().dt.tz_localize(None)
+            return df[BAR_COLS].astype(float)
+
+        return self._cached_daily(symbol, days, fetch)
+
+    def daily_many(self, symbols: list[str], days: int = 60) -> dict[str, pd.DataFrame]:
+        return DataProvider.daily_many(self, symbols, days)
+
+    def intraday_many(self, symbols: list[str], day: date) -> dict[str, pd.DataFrame]:
+        return DataProvider.intraday_many(self, symbols, day)

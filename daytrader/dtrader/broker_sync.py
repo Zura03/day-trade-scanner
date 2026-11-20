@@ -292,6 +292,8 @@ def check_stops(fills: list[Fill], stops: dict[str, dict], positions: list[dict]
 
 def broker_for(cfg: dict) -> Broker | None:
     """The broker to sync for this market. Schwab needs its login done once."""
+    if cfg["market"].futures:
+        return None
     if cfg["market"].key == "india":
         from .data.fyers_provider import fyers_keys
 

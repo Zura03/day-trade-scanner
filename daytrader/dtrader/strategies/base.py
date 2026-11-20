@@ -190,16 +190,28 @@ class Strategy:
         sig = Signal(ctx.symbol, self.name, ts, round(entry, 4), round(stop, 4), round(target, 4), reason)
         return sig if self.fees_ok(sig) else None
 
-    def fee_r(self, s: Signal) -> float | None:
-        """Round-trip broker fees and taxes as a fraction of the trade's risk
-        (0.3 = a stop-out costs 1.3R). None if it can't be sized."""
+    def lot(self, symbol: str) -> int:
+        """Units in one lot or contract (1 for stocks; 0 = unknown contract)."""
+        from ..futures import lot_units
+
+        return lot_units(self.market, symbol)
+
+    def cost(self, symbol: str, units: int, price: float):
+        """Round-trip broker fees and taxes for `units` at `price` (costs.Cost)."""
         from ..costs import round_trip
 
-        shares = self.position_size(s)
+        lot = self.lot(symbol)
+        return round_trip(self.market.key, self.risk_cfg.get("broker"), units * price,
+                          contracts=units // lot if lot else 0, symbol=symbol)
+
+    def fee_r(self, s: Signal) -> float | None:
+        """Round-trip broker fees and taxes as a fraction of the trade's risk
+        (0.3 = a stop-out costs 1.3R). None if it can't be sized. A future too big
+        for your capital is judged at one lot, as the backtest takes it."""
+        shares = self.position_size(s) or (self.lot(s.symbol) if self.market.futures else 0)
         if shares <= 0 or s.risk <= 0:
             return None
-        cost = round_trip(self.market.key, self.risk_cfg.get("broker"), shares * s.entry).total
-        return cost / (shares * s.risk)
+        return self.cost(s.symbol, shares, s.entry).total / (shares * s.risk)
 
     def fees_ok(self, s: Signal) -> bool:
         """Skip setups whose stop is so tight that fees eat more than
@@ -254,12 +266,53 @@ class Strategy:
         return int(self.exits.get("max_trades_per_day", 2))
 
     def position_size(self, s: Signal) -> int:
+        """Shares, or for futures units: whole lots x lot size, capped by the margin
+        the lots need (futures.margin_* in config: estimates, check your broker)."""
         risk_dollars = float(self.risk_cfg.get("risk_per_trade", 100))
         acct = float(self.risk_cfg.get("account_size", 25000))
         cap = acct * float(self.risk_cfg.get("max_position_pct", 25)) / 100
         if s.risk <= 0:
             return 0
+        if self.market.futures:
+            lot = self.lot(s.symbol)
+            if lot <= 0:
+                return 0
+            n = int(risk_dollars // (s.risk * lot))
+            margin = self.margin_per_lot(s.symbol, s.entry)
+            if margin:
+                n = min(n, int(cap // margin))
+            return max(n, 0) * lot
         return int(max(0, min(risk_dollars / s.risk, cap / s.entry)))
+
+    def size_text(self, s: Signal) -> str:
+        """The position size as you'd enter it: shares, 'lots (qty)' on NSE, contracts
+        on CME; for an unsizeable future, why (1 lot risks too much, or needs margin)."""
+        units = self.position_size(s)
+        if not self.market.futures:
+            return str(units)
+        lot, cur = self.lot(s.symbol), self.market.currency
+        word = "lot" if self.market.region == "india" else "contract"
+        if lot <= 0:
+            return "unknown contract"
+        if units:
+            n = units // lot
+            return f"{n} {word}{'s' if n != 1 else ''}" + (f" ({units})" if self.market.region == "india" else "")
+        one_lot = s.risk * lot
+        budget = float(self.risk_cfg.get("risk_per_trade", 100))
+        if one_lot > budget:
+            return f"0: 1 {word} risks {cur}{one_lot:,.0f}, over your {cur}{budget:,.0f}"
+        margin = self.margin_per_lot(s.symbol, s.entry) or 0
+        return f"0: 1 {word} needs ~{cur}{margin:,.0f} margin"
+
+    def margin_per_lot(self, symbol: str, price: float) -> float | None:
+        """Estimated margin for one lot/contract: futures.margin_per_contract[root], else
+        futures.margin_pct of the lot's value. None = not configured (no cap)."""
+        f = self.risk_cfg.get("futures") or {}
+        per = (f.get("margin_per_contract") or {}).get(symbol)
+        if per:
+            return float(per)
+        pct = f.get("margin_pct")
+        return price * self.lot(symbol) * float(pct) if pct else None
 
 
 def bar_break(df: pd.DataFrame, i: int, level: float) -> float | None:

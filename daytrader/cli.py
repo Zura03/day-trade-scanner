@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """Day-trade scanner for US small caps and NSE F&O stocks.
 
-Add --market india before the command for the Indian market (default: us).
+Add --market india before the command for the Indian market (default: us),
+--market india_fut or --market us_fut for index futures.
 
   python cli.py strategies              list strategies (* = active)
   python cli.py switch bull_flag        change the active strategy
@@ -47,6 +48,29 @@ def provider(cfg, args):
     p = get_provider(cfg, getattr(args, "source", None))
     print(f"[{cfg['market'].name} market, data: {p.name}]", file=sys.stderr)
     return p
+
+
+def futures_provider_when_ready(cfg, args):
+    """Futures have no free fallback feed: the daily job waits for your Fyers or
+    Schwab login (asking once on your phone) until the session ends."""
+    import time
+
+    from dtrader.alerts import notify
+
+    m, told = cfg["market"], False
+    while True:
+        try:
+            return provider(cfg, args)
+        except RuntimeError as e:
+            hours = m.session_hours(m.now().date())
+            if args.session and hours is None:
+                sys.exit(f"{m.name}: no session today")
+            if not args.session or m.now() >= hours[1]:
+                raise
+            if not told:
+                notify("INFO", "Login needed", f"{e}. Alerts start once you've logged in.", cfg)
+                told = True
+            time.sleep(120)
 
 
 def cmd_strategies(cfg, args):
@@ -178,7 +202,7 @@ def cmd_monitor(cfg, args):
     if args.strategy:
         set_active_strategy(args.strategy, cfg["market"])
         cfg = load_config(cfg["market"])
-    p = provider(cfg, args)
+    p = futures_provider_when_ready(cfg, args) if cfg["market"].futures else provider(cfg, args)
     # Refresh the backtest + switch hint before the session (skipped on
     # holidays, after the close and for --once).
     if cfg.get("switch_hint", {}).get("refresh_before_session") and not args.once:
@@ -425,7 +449,7 @@ def cmd_sell(cfg, args):
 def cmd_auth(cfg, args):
     from dtrader.data import get_provider
 
-    if cfg["market"].key == "india":
+    if cfg["market"].region == "india":
         from dtrader.data import india_broker
 
         broker = india_broker()
@@ -434,7 +458,7 @@ def cmd_auth(cfg, args):
 
             keys = fyers_keys()
             fyers_login(keys[0], keys[1], (cfg.get("fyers") or {}).get("redirect_url", DEFAULT_REDIRECT))
-            p = get_provider(cfg, "fyers")
+            p = get_provider(load_config("india"), "fyers")  # the stock feed checks the login for either market
             q = p.quotes(["RELIANCE"])
             px = f", RELIANCE {q['last'].iloc[0]:.2f}" if len(q) else ""
             print(f"Fyers login OK for today{px}.")
@@ -469,7 +493,8 @@ def cmd_auth(cfg, args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--market", default="us", choices=["us", "india"], help="market to work on (default us)")
+    ap.add_argument("--market", default="us", choices=["us", "india", "india_fut", "us_fut"],
+                    help="market to work on (default us): stocks, or index futures (india_fut, us_fut)")
     ap.add_argument("--source", choices=["auto", "alpaca", "schwab", "yfinance", "fyers", "groww", "kite"], help="override data_source")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("strategies")
