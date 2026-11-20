@@ -12,7 +12,12 @@ positions:
 - a buy you already recorded by hand (same stock, same shares, within 10
   minutes) is linked to that row instead of added twice;
 - a sell closes positions of that stock, oldest first, partly if needed.
-  Sells with nothing to close (short selling) are ignored: the tool is long-only.
+  Sells with nothing to close (short selling) are ignored for stocks.
+
+Futures (Fyers, NSE index and stock futures) go to the India futures market,
+by root (NIFTY, RELIANCE), in units (lots x lot size) as Fyers counts them. A
+sell with no long open opens a short, and a buy covers it; the stop-loss check
+then wants a pending BUY stop for a short.
 
 Fills are grouped per order (an order can fill in parts) and the quantity
 already handled per order is remembered in data/india/fyers_synced.json (or
@@ -28,12 +33,13 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
 
-from .markets import INDIA, US, Market
+from .markets import INDIA, INDIA_FUT, US, Market
 from . import portfolio
 
 TRADEBOOK = "https://api-t1.fyers.in/api/v3/tradebook"
@@ -55,6 +61,7 @@ class Broker:
 
 
 FYERS = Broker("fyers", "Fyers", INDIA, "an SL-M sell", " (Intraday)")
+FYERS_FUT = Broker("fyers", "Fyers", INDIA_FUT, "an SL-M order", " (Intraday)")
 SCHWAB = Broker("schwab", "Schwab", US, "a stop sell")
 
 
@@ -112,6 +119,34 @@ def group_fills(rows: list[dict]) -> list[Fill]:
     return sorted(fills, key=lambda f: f.time)
 
 
+_FUT = re.compile(r"^NSE:([A-Z0-9&-]+?)\d{2}[A-Z]{3}FUT$")
+
+
+def fut_root(sym: str) -> str | None:
+    """NSE:NIFTY26NOVFUT -> NIFTY, NSE:M&M26NOVFUT -> M&M; None if not a future."""
+    m = _FUT.match(sym)
+    return m.group(1) if m else None
+
+
+def group_fut_fills(rows: list[dict]) -> list[Fill]:
+    """NSE futures fills (index and stock), one per order, by root, oldest first."""
+    orders: dict[str, dict] = {}
+    for t in rows:
+        root = fut_root(str(t.get("symbol", "")))
+        if not root:
+            continue
+        o = orders.setdefault(str(t["orderNumber"]), {"symbol": root, "side": int(t["side"]),
+                                                       "qty": 0, "value": 0.0, "time": None})
+        qty = int(t.get("tradedQty") or 0)
+        o["qty"] += qty
+        o["value"] += float(t.get("tradePrice") or 0) * qty
+        when = _parse_time(str(t.get("orderDateTime", "")))
+        o["time"] = min(o["time"], when) if o["time"] else when
+    fills = [Fill(k, o["symbol"], o["side"], o["qty"], o["value"] / o["qty"], o["time"])
+             for k, o in orders.items() if o["qty"] > 0]
+    return sorted(fills, key=lambda f: f.time)
+
+
 def _synced_path(b: Broker):
     return SYNCED_PATH if b is FYERS else b.market.path(f"{b.key}_synced.json")
 
@@ -131,15 +166,21 @@ def _px(x: float) -> float:
 
 def _levels(symbol: str, price: float, cfg: dict, b: Broker = FYERS) -> tuple[str, float, float, str | None]:
     """(strategy, stop, target, note) from a recent setup, else defaults."""
+    return _levels_side(symbol, price, cfg, b, 1)
+
+
+def _levels_side(symbol: str, price: float, cfg: dict, b: Broker, side: int) -> tuple[str, float, float, str | None]:
+    """_levels for either side: a short's stop is above the price and its target below."""
     rr = float(cfg.get("risk", {}).get("reward_risk", 2.0))
-    setups = [v for v in portfolio.recent_buyable(b.market, SETUP_MINUTES).values() if v["symbol"] == symbol]
+    setups = [v for v in portfolio.recent_buyable(b.market, SETUP_MINUTES).values()
+              if v["symbol"] == symbol and int(v.get("side", 1) or 1) == side]
     for s in setups:  # newest first
-        if s["stop"] < price < s["target"]:
+        if side * (s["stop"] - price) < 0 < side * (s["target"] - price):
             return s["strategy"], s["stop"], s["target"], None
     pct = float((cfg.get(b.key) or {}).get("default_stop_pct", 1.0))
-    stop = _px(price * (1 - pct / 100))
+    stop = _px(price * (1 - side * pct / 100))
     return "manual", stop, _px(price + rr * (price - stop)), \
-        f"no matching setup: stop set {pct:g}% below, check it"
+        f"no matching setup: stop set {pct:g}% {'below' if side > 0 else 'above'}, check it"
 
 
 def apply_fills(fills: list[Fill], cfg: dict, b: Broker = FYERS) -> list[str]:
@@ -153,7 +194,10 @@ def apply_fills(fills: list[Fill], cfg: dict, b: Broker = FYERS) -> list[str]:
             new = f.qty - int(synced["orders"].get(f.order, 0))
             if new <= 0:
                 continue
-            msg = _buy(f, new, cfg, b) if f.side == 1 else _sell(f, new, b)
+            if b.market.futures:
+                msg = _fut_fill(f, new, cfg, b)
+            else:
+                msg = _buy(f, new, cfg, b) if f.side == 1 else _sell(f, new, b)
             synced["orders"][f.order] = f.qty
             path.write_text(json.dumps(synced))
             if msg:
@@ -204,6 +248,36 @@ def _sell(f: Fill, qty: int, b: Broker = FYERS) -> str | None:
         closed += n
         left -= n
     return f"Recorded your sale: {closed} {f.symbol} @ {f.price:.2f}, P&L {b.market.fmt_money(pnl)}"
+
+
+def _fut_fill(f: Fill, qty: int, cfg: dict, b: Broker) -> str:
+    """A futures fill: first close positions on the other side (oldest first), then
+    open the rest as a long (buy) or a short (sell)."""
+    from .futures import qty_text
+
+    m = b.market
+    against = sorted((r for r in portfolio.load_positions(m)
+                      if r["symbol"] == f.symbol and int(r.get("side", 1)) == -f.side), key=lambda r: r["entry_time"])
+    msgs, left, pnl = [], qty, 0.0
+    for r in against:
+        if left <= 0:
+            break
+        n = min(left, r["shares"])
+        verb = "sold" if f.side < 0 else "bought back"
+        done = portfolio.record_sell(m, r["id"], _px(f.price), f.time, f"{verb} ({b.label})", n)
+        pnl += done["pnl"]
+        left -= n
+    if left < qty:
+        msgs.append(f"Recorded your {'sale' if f.side < 0 else 'cover'}: {qty_text(m, f.symbol, qty - left)} "
+                    f"{f.symbol} @ {f.price:.2f}, P&L {m.fmt_money(pnl)}")
+    if left > 0:
+        strategy, stop, target, note = _levels_side(f.symbol, f.price, cfg, b, f.side)
+        extra = {"source": b.key, "orders": [f.order]} | ({"note": note} if note else {})
+        portfolio.add_buy(m, f.symbol, left, _px(f.price), stop, target, strategy, f.time, side=f.side, **extra)
+        tail = f" ({note})" if note else ""
+        msgs.append(f"Recorded your {'buy' if f.side > 0 else 'short'}: {qty_text(m, f.symbol, left)} {f.symbol} "
+                    f"@ {_px(f.price):g}, stop {stop:g}, target {target:g}{tail}")
+    return "; ".join(msgs)
 
 
 # ---- stop-loss check ----------------------------------------------------------
@@ -290,10 +364,57 @@ def check_stops(fills: list[Fill], stops: dict[str, dict], positions: list[dict]
     return out
 
 
+def fut_stop_issues(fills: list[Fill], orders: list[dict], positions: list[dict], now: datetime) -> list[StopIssue]:
+    """Futures: each net position today needs a pending stop order on the other
+    side (a SELL stop under a long, a BUY stop over a short) for all of it."""
+    stops: dict[tuple[str, int], dict] = {}
+    for o in orders:
+        root = fut_root(str(o.get("symbol", "")))
+        if not root or int(o.get("status", 0)) not in PENDING or int(o.get("type", 0)) not in STOP_TYPES:
+            continue
+        s = stops.setdefault((root, int(o.get("side", 0))), {"qty": 0, "ids": []})
+        s["qty"] += int(o.get("remainingQuantity") or (int(o.get("qty") or 0) - int(o.get("filledQty") or 0)))
+        s["ids"].append(str(o.get("id", "")))
+    held: dict[str, int] = {}
+    last: dict[str, datetime] = {}
+    for f in fills:
+        held[f.symbol] = held.get(f.symbol, 0) + f.side * f.qty
+        last[f.symbol] = max(last.get(f.symbol, f.time), f.time)
+    plan = {(r["symbol"], int(r.get("side", 1))): float(r["stop"]) for r in positions}
+    day, out = now.date().isoformat(), []
+    for sym, net in sorted(held.items()):
+        if net == 0 or (now - last[sym]).total_seconds() < STOP_GRACE_MINUTES * 60:
+            continue
+        side = 1 if net > 0 else -1
+        need, s = abs(net), stops.get((sym, -side), {"qty": 0})
+        at = f" at {plan[(sym, side)]:.2f}" if (sym, side) in plan else ""
+        what = "SELL stop-loss under your long" if side > 0 else "BUY stop-loss over your short"
+        if s["qty"] <= 0:
+            out.append(StopIssue(f"stop|{day}|{sym}|missing|{net}", sym, f"No stop-loss in Fyers for your {sym} future",
+                                 f"Place a {what}: {need} qty{at} (Intraday). Without it nothing closes the trade "
+                                 "if the price runs while you're away."))
+        elif s["qty"] < need:
+            out.append(StopIssue(f"stop|{day}|{sym}|partial|{net}|{s['qty']}", sym,
+                                 f"Stop-loss covers only {s['qty']} of your {need} {sym}",
+                                 f"Change the pending stop-loss to {need} qty{at}."))
+    for (sym, oside), s in sorted(stops.items()):
+        net = held.get(sym, 0)
+        if s["qty"] > 0 and net * oside >= 0:  # no position for this stop to close
+            out.append(StopIssue(f"stop|{day}|{sym}|orphan|{','.join(sorted(s['ids']))}", sym,
+                                 f"Cancel the leftover {sym} stop-loss",
+                                 f"A stop-loss {'buy' if oside > 0 else 'sell'} for {s['qty']} {sym} is still pending "
+                                 "but you hold no position it closes. If it triggers it opens a new trade."))
+    return out
+
+
 def broker_for(cfg: dict) -> Broker | None:
     """The broker to sync for this market. Schwab needs its login done once."""
     if cfg["market"].futures:
-        return None
+        if cfg["market"].region != "india":
+            return None  # Schwab futures trades aren't read
+        from .data.fyers_provider import fyers_keys
+
+        return FYERS_FUT if fyers_keys() and (cfg.get("fyers") or {}).get("sync_trades", True) else None
     if cfg["market"].key == "india":
         from .data.fyers_provider import fyers_keys
 
@@ -324,11 +445,14 @@ def sync_and_check(cfg: dict, check: bool = True) -> tuple[list[str], list[StopI
     keys, token = fyers_keys(), token_valid_today()
     if not (keys and token):
         return [], []
-    fills = group_fills(fetch_tradebook(keys[0], token))
-    msgs = apply_fills(fills, cfg)
+    b = broker_for(cfg)
+    fills = (group_fut_fills if b is FYERS_FUT else group_fills)(fetch_tradebook(keys[0], token))
+    msgs = apply_fills(fills, cfg, b)
     if not (check and (cfg.get("fyers") or {}).get("stop_check", True)):
         return msgs, []
     orders = fetch_orderbook(keys[0], token)
+    if b is FYERS_FUT:
+        return msgs, fut_stop_issues(fills, orders, portfolio.load_positions(INDIA_FUT), INDIA_FUT.now())
     return msgs, stop_issues(fills, orders, portfolio.load_positions(INDIA), INDIA.now())
 
 
