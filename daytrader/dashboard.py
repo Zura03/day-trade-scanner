@@ -297,6 +297,37 @@ def buyable_today_section(df: pd.DataFrame) -> None:
 
 
 # ---------------- buyable now ---------------------------------------------
+def stock_futures_table(b: pd.DataFrame) -> None:
+    """The buyable setups as the stocks' front-month futures (shorts are futures-only)."""
+    from dtrader.futures import stock_futures
+
+    try:
+        f = stock_futures(b, prov, load_config("india_fut"))
+    except Exception as e:
+        st.caption(f"Futures prices unavailable: {str(e)[:100]}")
+        return
+    if f.empty:
+        return
+    st.markdown(ui.section("As futures", "front month · sized with your India futures settings"),
+                unsafe_allow_html=True)
+    show = pd.DataFrame({
+        "Symbol": f["symbol"], "Action": ["Buy" if s > 0 else "Short" for s in f["side"]],
+        "Strategy": [REGISTRY[n].title for n in f["strategy"]], "Contract": f["contract"],
+        "Future": f["fut_last"], "Basis": f["basis"], "Entry": f["entry"], "Stop": f["stop"],
+        "Max target": f["target"], "Size": f["size"], "Costs (1 lot)": f["cost_1lot"],
+        "Costs (R)": f["cost_r"], "Margin (1 lot, est.)": f["margin_1lot"]})
+    money = st.column_config.NumberColumn(format="%.2f")
+    st.dataframe(show, width="stretch", hide_index=True,
+                 column_config={"Future": money, "Basis": money, "Entry": money, "Stop": money, "Max target": money,
+                                "Costs (1 lot)": st.column_config.NumberColumn(format="₹%.0f"),
+                                "Costs (R)": st.column_config.NumberColumn(format="%.2fR"),
+                                "Margin (1 lot, est.)": st.column_config.NumberColumn(format="₹%.0f"),
+                                "Size": st.column_config.TextColumn(width="medium")})
+    st.caption("Levels are the stock's, moved by the basis (future - stock). Shorts are futures trades only. "
+               "Lots, costs and margin use the India futures market's capital in Settings; margin is an estimate - "
+               "check Fyers. Without a Fyers login there are no futures prices.")
+
+
 def buyable_section(df: pd.DataFrame, cands: list) -> None:
     """Every setup that is buyable right now, across all strategies, with its odds."""
     bt = load_last_trades(mk)
@@ -396,6 +427,8 @@ def buyable_section(df: pd.DataFrame, cands: list) -> None:
                                 else st.column_config.NumberColumn(format="%d"),
                                 "Setup": st.column_config.TextColumn(width="large"),
                                 "News": st.column_config.TextColumn(width="large")})
+    if cfg.get("stock_futures") and not mk.futures:
+        stock_futures_table(b)
     rr = cfg.get("risk", {}).get("reward_risk", 2)
     prof = exit_profile(bt, strategy.name)
     st.caption(f"**Max target** is entry + {rr:g} × risk (Oversold Bounce: the VWAP), a ceiling for the trade, "

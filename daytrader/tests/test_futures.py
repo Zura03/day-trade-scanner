@@ -62,4 +62,21 @@ assert ic["broker"] == "fyers" and ic["exits"]["time_exit"] == "15:10"     # fro
 assert ic["universe"]["watchlist"] == ["NIFTY", "BANKNIFTY"] and ic["hide_from_buyable"] == []
 assert uc["exits"]["time_exit"] == "15:50" and uc["universe"]["watchlist"] == ["MES", "MNQ"]
 assert get_market("india-fut") is INDIA_FUT and INDIA_FUT.region == "india" and US_FUT.futures
+# a stock setup as its future: levels moved by the basis, lots from the futures settings
+rows.append({"symbol": "NSE:RELIANCE26NOVFUT", "root": "RELIANCE", "lot": 500, "tick": 0.1,
+             "expiry": "2026-11-24", "name": "RELIANCE 24 Nov 26 FUT"})
+class P:
+    def futures_quotes(self, roots): return {"RELIANCE": 1302.0}
+setups = pd.DataFrame([{"symbol": "RELIANCE", "strategy": "orb", "side": 1, "last": 1300.0, "entry": 1300.0,
+                        "stop": 1298.0, "target": 1304.0},
+                       {"symbol": "RELIANCE", "strategy": "orb_short", "side": -1, "last": 1300.0, "entry": 1300.0,
+                        "stop": 1302.0, "target": 1296.0}])
+fcfg = {"broker": "fyers", "risk": {"risk_per_trade": 2500, "account_size": 1_000_000, "max_position_pct": 100},
+        "futures": {"margin_pct": 0.15}}
+f = fu.stock_futures(setups, P(), fcfg)
+assert list(f["basis"]) == [2.0, 2.0] and list(f["entry"]) == [1302.0, 1302.0] and f["stop"].iloc[0] == 1300.0
+assert list(f["lots"]) == [2, 2] and f["size"].iloc[0] == "2 lots (1000)"   # 2 pts x 500 = 1000 per lot
+assert f["stop"].iloc[1] == 1304.0 and f["target"].iloc[1] == 1298.0        # the short: stop above
+f = fu.stock_futures(setups.head(1), P(), {**fcfg, "risk": {**fcfg["risk"], "risk_per_trade": 500}})
+assert f["lots"].iloc[0] == 0 and f["size"].iloc[0].startswith("0: 1 lot risks")
 print("ok")

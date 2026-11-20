@@ -20,6 +20,8 @@ import time as _time
 from dataclasses import dataclass
 from datetime import date, datetime
 
+import pandas as pd
+
 from .markets import INDIA, INDIA_FUT, Market
 
 FYERS_FO_CSV = "https://public.fyers.in/sym_details/NSE_FO.csv"
@@ -141,3 +143,49 @@ def qty_text(market: Market, symbol: str, units: float) -> str:
     if market.region == "india":
         return f"{n} lot{'s' if n != 1 else ''} ({units})"
     return f"{n} contract{'s' if n != 1 else ''}"
+
+
+def stock_futures(rows: pd.DataFrame, provider, cfg_fut: dict) -> pd.DataFrame:
+    """NSE stock setups traded as the stock's front-month future: contract, futures
+    price, basis (future - stock), the setup's levels shifted by the basis, lots for
+    the risk and capital set for India futures, round-trip costs and estimated margin.
+    `rows` are scan rows with a signal; the result has one row per setup it could price."""
+    from .costs import round_trip
+
+    if rows is None or rows.empty:
+        return pd.DataFrame()
+    roots = list(dict.fromkeys(rows["symbol"]))
+    px = provider.futures_quotes(roots) if hasattr(provider, "futures_quotes") else {}
+    risk = cfg_fut.get("risk") or {}
+    budget = float(risk.get("risk_per_trade", 0))
+    cap = float(risk.get("account_size", 0)) * float(risk.get("max_position_pct", 100)) / 100
+    margin_pct = float((cfg_fut.get("futures") or {}).get("margin_pct") or 0)
+    out = []
+    for r in rows.itertuples():
+        try:
+            c = contract(INDIA_FUT, r.symbol)
+        except Exception:
+            continue
+        fut = px.get(r.symbol)
+        basis = fut - r.last if fut else None
+        shift = basis or 0.0
+        side = int(getattr(r, "side", 1) or 1)
+        entry, stop, target = r.entry + shift, r.stop + shift, r.target + shift
+        risk_pts = side * (entry - stop)
+        margin = (fut or entry) * c.lot * margin_pct if margin_pct else None
+        lots = int(budget // (risk_pts * c.lot)) if risk_pts > 0 and budget else 0
+        if margin:
+            lots = min(lots, int(cap // margin))
+        why = "" if lots else (f"1 lot risks ₹{risk_pts * c.lot:,.0f}, over your ₹{budget:,.0f}"
+                               if risk_pts * c.lot > budget else f"needs ~₹{margin or 0:,.0f} margin")
+        cost = round_trip("india_fut", cfg_fut.get("broker"), max(lots, 1) * c.lot * entry)
+        out.append({"symbol": r.symbol, "strategy": r.strategy, "side": side, "contract": c.name,
+                    "fut_last": fut, "basis": round(basis, 2) if basis is not None else None,
+                    "entry": round(entry, 2), "stop": round(stop, 2), "target": round(target, 2),
+                    "lot": c.lot, "lots": lots,
+                    "size": f"{lots} lot{'s' if lots != 1 else ''} ({lots * c.lot})" if lots else f"0: {why}",
+                    "cost_1lot": round(round_trip("india_fut", cfg_fut.get("broker"),
+                                                                              c.lot * entry).total, 0),
+                    "cost_r": round(cost.total / (max(lots, 1) * c.lot * risk_pts), 2) if risk_pts > 0 else None,
+                    "margin_1lot": round(margin, 0) if margin else None})
+    return pd.DataFrame(out)

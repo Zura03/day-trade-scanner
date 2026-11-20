@@ -271,6 +271,8 @@ class Monitor:
         except Exception as e:
             print(f"news {s.symbol}: {e}", file=sys.stderr, flush=True)
         odds += extra
+        if self.cfg.get("stock_futures") and not self.m.futures:
+            odds += self._as_future(s, last)
         # the odds and news above can take a while, and the price doesn't wait
         now_px = self._live_price(s.symbol)
         print(f"{s.symbol} signal {s.time:%H:%M}: odds and news took {_time.time() - started:.1f}s, "
@@ -287,6 +289,26 @@ class Monitor:
         self.state["positions"].append(Position.from_signal(s, sh).to_dict())
         taken[tkey] = taken.get(tkey, 0) + 1
         self._save()  # a check failing later must not lose a trade you've been told about
+
+    def _as_future(self, s, last: float) -> str:
+        """' | future: RELIANCE 23 Nov 26 FUT 1356.20, entry 1357.10 stop ..., 1 lot (500)'."""
+        try:
+            import pandas as pd
+
+            from .config import load_config
+            from .futures import stock_futures
+
+            row = pd.DataFrame([{"symbol": s.symbol, "strategy": s.strategy, "side": s.side, "last": last,
+                                 "entry": s.entry, "stop": s.stop, "target": s.target}])
+            f = stock_futures(row, self.p, load_config("india_fut"))
+            if f.empty:
+                return ""
+            r = f.iloc[0]
+            px = f" {r['fut_last']:.2f}" if r["fut_last"] == r["fut_last"] and r["fut_last"] else ""
+            return f" | future: {r['contract']}{px}, entry {r['entry']:.2f} stop {r['stop']:.2f}, {r['size']}"
+        except Exception as e:
+            print(f"future {s.symbol}: {e}", file=sys.stderr, flush=True)
+            return ""
 
     def _live_price(self, symbol: str) -> float | None:
         """The price right now, or None if unknown. Alpaca's free quotes are 15
@@ -344,13 +366,14 @@ def strategy_check(provider: DataProvider, cfg: dict, log=print) -> dict:
     keeps the current strategy. Returns the (possibly updated) config."""
     from .backtest import run_backtest
     from .performance import strategy_hint
-    from .strategies import REGISTRY, all_strategies, strategy_names
+    from .strategies import LONG, REGISTRY, all_strategies, strategy_names
 
     m: Market = cfg.get("market", US)
     sh = cfg.get("switch_hint", {})
     try:
         t = run_backtest(provider, cfg, all_strategies(cfg), days=int(sh.get("lookback_days", 10)), log=log)
-        h = strategy_hint(t, cfg, names=strategy_names(cfg))
+        # a stock market only switches itself among the longs: its shorts are futures trades
+        h = strategy_hint(t, cfg, names=strategy_names(cfg) if m.futures else list(LONG))
     except Exception as e:
         notify("INFO", "Strategy check failed", f"Keeping {cfg['active_strategy']}: {str(e)[:150]}", cfg)
         return cfg

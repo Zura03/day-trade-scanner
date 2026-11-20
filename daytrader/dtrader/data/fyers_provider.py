@@ -367,6 +367,35 @@ class FyersProvider(DataProvider):
     def movers(self, limit: int = 50) -> list[str]:
         return rank_movers(self.quotes(self.all_symbols()), limit)
 
+    def futures_quotes(self, roots: list[str]) -> dict[str, float]:
+        """Last price of each stock's front-month future ({root: price}), one call per
+        50 stocks, reused for QUOTE_TTL seconds."""
+        from ..futures import contract
+
+        now, out, ask = _time.time(), {}, {}
+        cache = self.__dict__.setdefault("_fut_px", {})
+        for r in roots:
+            hit = cache.get(r)
+            if hit and hit[0] > now - QUOTE_TTL:
+                out[r] = hit[1]
+                continue
+            try:
+                ask[contract(INDIA_FUT, r).symbol] = r
+            except Exception:
+                continue  # no future for this stock
+        syms = list(ask)
+        for i in range(0, len(syms), 50):
+            try:
+                d = self._get("/quotes", {"symbols": ",".join(syms[i:i + 50])}, source="quotes")
+            except BudgetExhausted:
+                break
+            for q in d.get("d") or []:
+                lp = (q.get("v") or {}).get("lp")
+                if q.get("s") == "ok" and lp and q.get("n") in ask:
+                    out[ask[q["n"]]] = float(lp)
+                    cache[ask[q["n"]]] = (now, float(lp))
+        return out
+
     def _refresh_every(self) -> float:
         """Seconds between refetches of one stock's bars today, so the
         stocks being watched fit in the budget left for the session."""

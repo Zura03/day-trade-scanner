@@ -167,6 +167,12 @@ india:
     max_daily_loss_pct: 3.0
     min_shares: 2
   broker: fyers               # groww | zerodha | dhan | fyers | angel | shoonya | mstock (exact fees)
+  # Stock futures: every setup also shown as the stock's front-month future (price,
+  # lots, costs and margin use the India futures settings), and short setups too -
+  # those are futures trades (a stock can't be held short). The monitor still only
+  # switches itself among the long strategies.
+  stock_futures: true
+  allow_short: true
 
   risk:
     reward_risk: 2.0          # account size / risk per trade come from `capital` above
