@@ -57,6 +57,9 @@ _SWAP = {"high": "low", "low": "high", "above": "below", "below": "above", "up":
          "higher": "lower", "lower": "higher", "highs": "lows", "lows": "highs", "green": "red", "red": "green",
          "buy": "short", "bought": "shorted", "sell": "cover", "reclaim": "rejection", "bounce": "drop",
          "oversold": "overbought", "flush": "spike", "gainers": "losers", "rally": "selloff"}
+_SWAP |= {"sold off": "rallied", "rallied": "sold off", "selling off": "rallying", "gap-down": "gap-up",
+          "gap-up": "gap-down", "dipped": "popped", "popped": "dipped", "ripped": "dropped", "dropped": "ripped",
+          "dip": "pop", "pop": "dip"}
 _WORD = re.compile(r"\b(" + "|".join(sorted(_SWAP, key=len, reverse=True)) + r")\b", re.I)
 
 
@@ -66,7 +69,7 @@ def mirror_text(text: str) -> str:
     def sw(mo):
         w = mo.group(0)
         r = _SWAP[w.lower()]
-        return r.capitalize() if w[0].isupper() else r
+        return r[0].upper() + r[1:] if w[0].isupper() else r
     return _WORD.sub(sw, text or "")
 
 

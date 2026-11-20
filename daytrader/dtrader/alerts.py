@@ -282,10 +282,16 @@ class Monitor:
                   file=sys.stderr, flush=True)
             return
         px = f" | last {now_px:.2f}" if now_px is not None else ""
-        size = self.strategy.size_text(s) if self.m.futures else f"{sh} sh"
+        if self.m.futures:
+            size = self.strategy.size_text(s)
+        elif s.side < 0:  # a stock can't be held short: the trade is its future (line below)
+            size = "futures only"
+        else:
+            size = f"{sh} sh"
         notify(s.action, f"{s.symbol} @ {s.entry:.2f}",
-               f"stop {s.stop:.2f} / max target {s.target:.2f} / {size} "
-               f"(risk {self.m.currency}{s.risk * sh:,.0f}) - {s.reason}{px}{odds}", self.cfg)
+               f"stop {s.stop:.2f} / max target {s.target:.2f} / {size}"
+               + ("" if size == "futures only" else f" (risk {self.m.currency}{s.risk * sh:,.0f})")
+               + f" - {s.reason}{px}{odds}", self.cfg)
         self.state["positions"].append(Position.from_signal(s, sh).to_dict())
         taken[tkey] = taken.get(tkey, 0) + 1
         self._save()  # a check failing later must not lose a trade you've been told about

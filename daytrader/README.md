@@ -741,6 +741,56 @@ sign-in token valid for 30 days, so you can bookmark it. Delete
 - **Separate everything:** strategy, backtest, positions and alerts live in
   `data/india/`.
 
+## Futures
+
+Two more markets, picked in the dashboard's Market control or with `--market`:
+
+- **India futures** (`india_fut`): NIFTY and BANKNIFTY futures through Fyers
+  (FINNIFTY and MIDCPNIFTY too, if you add them to the watchlist). Same login
+  and the same 5,000-calls-a-day budget as the stock feed.
+- **US futures** (`us_fut`): MES and MNQ through Schwab (ES and NQ too: the same
+  charts at 10x the size). 9:30–16:00 ET only.
+
+How it differs from stocks:
+
+- **A fixed list, every session**, instead of a scan for movers. The backtest
+  replays each one on every session.
+- **The front-month contract**, rolling to the next on expiry day. India's
+  contracts and lot sizes come from Fyers' public contract list; history is
+  Fyers' continuous series, so it spans earlier contracts. Schwab's `/MES`
+  is always the front month; its minute history reaches back only about
+  30–45 days, so US backtests are thin.
+- **Sized in whole lots** (contracts in the US), capped by an estimated
+  margin (`futures:` in `config.yaml` - check your broker's real figure). A
+  setup that needs more than your capital still shows and alerts, with why:
+  "1 lot risks ₹13,000, over your ₹2,500" or "needs ~₹2 lakh margin". The
+  backtest judges such setups at one lot.
+- **Costs:** India futures pay 0.05% STT on the sell (Budget 2026, from
+  1 April 2026), so a tight stop can cost more than it risks; setups whose
+  costs are over 15% of the risk are skipped. US futures pay a commission
+  and exchange fees per contract.
+- **Shorts.** Every strategy also runs as a short (`orb_short`, ...): the same
+  rules on the chart turned upside down around the previous close, so a
+  breakout becomes a breakdown. VWAP and the EMAs flip exactly, so the exits,
+  the backtest and the odds are the same code for both sides. Alerts say
+  SHORT and COVER. Shorts have no track record yet: let the backtest and the
+  switch hint judge them before you rely on one.
+- **Monitors:** `./scripts/autostart.sh install-futures` adds an India futures
+  monitor (09:00) and a US futures monitor (18:00). With no free feed to fall
+  back on, each waits for your Fyers or Schwab login and asks for it once.
+- **Fyers futures trades** are recorded like stock trades, in the India
+  futures market: a sell with nothing to close opens a short, a buy covers it,
+  and the stop check wants a BUY stop-loss over a short. Schwab futures trades
+  aren't read.
+
+**India stock futures.** The India stock scanner also shows each buyable setup
+as the stock's front-month future (under Buyable now, and as a line on India
+alerts): contract, futures price, basis, the levels moved by the basis, lots,
+costs and margin, using the India futures market's capital. India stocks also
+get the short setups; a stock can't be held short, so those are futures
+trades ("futures only" on the alert). The India monitor still switches itself
+only among the long strategies.
+
 ## Configuration
 
 Everything is in `config.yaml`. The top level is the US; the `india:` section
