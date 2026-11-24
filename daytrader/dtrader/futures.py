@@ -169,7 +169,7 @@ def stock_futures(rows: pd.DataFrame, provider, cfg_fut: dict) -> pd.DataFrame:
         fut = px.get(r.symbol)
         basis = fut - r.last if fut else None
         shift = basis or 0.0
-        side = int(getattr(r, "side", 1) or 1)
+        side = -1 if getattr(r, "side", 1) < 0 else 1
         entry, stop, target = r.entry + shift, r.stop + shift, r.target + shift
         risk_pts = side * (entry - stop)
         margin = (fut or entry) * c.lot * margin_pct if margin_pct else None

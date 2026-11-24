@@ -26,8 +26,7 @@ def net_r(j: pd.DataFrame, cfg: dict) -> pd.Series:
     c = trade_costs(cfg, cfg["market"])
     out = []
     for r in j.itertuples():
-        side = int(getattr(r, "side", 1) or 1)  # costs always work against you: shorts mirror them
-        side = 1 if side != side else side      # NaN from older journal rows
+        side = -1 if getattr(r, "side", 1) < 0 else 1  # costs always work against you: shorts mirror them
         entry = r.entry + side * max(r.entry * c["slippage"], c["tick"])
         exit_ = r.exit_price - side * max(r.exit_price * c["slippage"], c["tick"])
         sh = int(getattr(r, "shares", 0) or 0)
@@ -52,6 +51,9 @@ def load_journal(market: str | Market | None = None, cfg: dict | None = None) ->
     j = j.drop_duplicates(subset=["symbol", "strategy", "entry_time"], keep="last")
     j["entry_time"] = m.parse_times(j["entry_time"])
     j["day"] = j["entry_time"].dt.date
+    if "side" not in j:
+        j["side"] = 1
+    j["side"] = j["side"].fillna(1).astype(int)  # rows from before shorts existed have no side: longs
     j["r"] = net_r(j, cfg) if cfg is not None and len(j) else j["r_multiple"]
     j["source"] = "live"
     return j
