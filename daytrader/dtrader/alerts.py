@@ -30,6 +30,7 @@ from .performance import journal_path
 from .scanner import analyse, gather_candidates, refresh_bars, session_day
 from .strategies import MAX_CHASE_R, Position, Strategy, get_strategy
 SLOW_TICK_SECONDS = 30
+MAX_SIGNAL_AGE_MIN = 10  # a BUY/SHORT older than this isn't sent (alerts.max_signal_age_minutes)
 FAILURES_TO_WARN = 5  # checks failed in a row before your phone hears about it
 COLORS = {"BUY": "\033[1;32m", "SELL": "\033[1;31m", "STOP": "\033[1;31m", "WATCH": "\033[1;33m",
           "INFO": "\033[1;36m", "SHORT": "\033[1;35m", "COVER": "\033[1;31m"}
@@ -228,6 +229,22 @@ class Monitor:
                        f"{adv.reason}. Last {adv.last:.2f}, {adv.r_now:+.2f}R, {pnl}. "
                        "Record the sale in the dashboard (My positions).", self.cfg)
 
+    def _too_old(self, s) -> bool:
+        """True (and logged) when the signal's bar closed too long ago to act on:
+        the Mac slept mid-check, or the monitor started late. The chart the signal
+        came from may be just as old. 0 turns the limit off."""
+        limit = float(self.cfg.get("alerts", {}).get("max_signal_age_minutes", MAX_SIGNAL_AGE_MIN))
+        if limit <= 0:
+            return False
+        if self.p.name == "alpaca":
+            limit += 15  # its free data is always 15 minutes behind
+        age = (pd.Timestamp(self.m.now()) - s.time).total_seconds() / 60 - 1
+        if age <= limit:
+            return False
+        print(f"{s.symbol} {s.action} not sent: its {s.time:%H:%M} signal is {age:.0f} min old (limit {limit:g})",
+              file=sys.stderr, flush=True)
+        return True
+
     def _open(self, s, last: float, day, cand=None) -> None:
         if getattr(self, "risk", None) is not None and self.risk.blocked:
             return  # daily risk limit hit: no new BUY alerts (see _risk_check)
@@ -247,6 +264,8 @@ class Monitor:
         s.entry = round(fill, 4)
         sh = self.strategy.position_size(s)
         if sh <= 0 and not self.m.futures:  # a future too big for your capital still alerts, saying why
+            return
+        if self._too_old(s):
             return
         started = _time.time()
         odds = ""
@@ -280,6 +299,8 @@ class Monitor:
         if now_px is not None and (s.side * (now_px - s.stop) <= 0 or s.side * (now_px - s.entry) > MAX_CHASE_R * s.risk):
             print(f"{s.symbol} {s.action} not sent: price {now_px} left the setup (entry {s.entry}, stop {s.stop})",
                   file=sys.stderr, flush=True)
+            return
+        if self._too_old(s):  # last check before sending: the Mac may have slept through the work above
             return
         px = f" | last {now_px:.2f}" if now_px is not None else ""
         if self.m.futures:

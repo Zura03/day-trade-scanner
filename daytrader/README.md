@@ -696,8 +696,10 @@ are kept either way.
   it sleeps there are no BUY/SELL alerts, no dashboard on your phone and no
   Fyers trade recording. Nothing is lost when it wakes: the monitor carries on
   with fresh prices, sends any SELL whose stop or target was hit while it
-  slept, and records Fyers trades made meanwhile. BUY setups that ran away
-  while it slept are missed. If the Mac was asleep at a start time, that job
+  slept, and records Fyers trades made meanwhile. BUY and SHORT signals more
+  than 10 minutes old are never sent (`alerts.max_signal_age_minutes`, 0 turns
+  that off), so setups from while it slept are missed; any still buyable show
+  under Buyable now on the dashboard. If the Mac was asleep at a start time, that job
   runs when it wakes.
 - **During market hours, keep the Mac plugged in with the lid open** (screen
   off is fine) if you want alerts while you're away from it.

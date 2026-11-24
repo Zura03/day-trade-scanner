@@ -107,6 +107,7 @@ hide_from_buyable: [orb, orb_retest, opening_reversal, vwap_reclaim, gap_down_bo
 # --- Alerts ------------------------------------------------------------
 alerts:
   poll_seconds: 60
+  max_signal_age_minutes: 10  # no BUY/SHORT for a signal older than this (Mac asleep, monitor started late); 0 = no limit
   desktop_notifications: true # macOS notification centre
   sound: true
   # Phone push via the free ntfy app: set NTFY_TOPIC in .env, then subscribe

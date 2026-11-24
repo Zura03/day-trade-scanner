@@ -17,7 +17,7 @@ dtrader.news.check = lambda sym, m: types.SimpleNamespace(earnings_when=None, fr
 cfg = {"market": US, "active_strategy": "gap_and_go", "risk": {"risk_per_trade": 100, "reward_risk": 2}, "exits": {},
        "strategies": {}, "universe": {}}
 day = US.now().date()
-sig = lambda sym: Signal(sym, "gap_and_go", pd.Timestamp(f"{day} 09:30", tz=US.tz), 2.10, 1.96, 2.38, "test")
+sig = lambda sym: Signal(sym, "gap_and_go", pd.Timestamp(US.now()).floor("min") - pd.Timedelta(minutes=2), 2.10, 1.96, 2.38, "test")
 
 
 def run(name, price, provider_name="schwab"):
